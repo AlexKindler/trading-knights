@@ -42,11 +42,18 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <AuthProvider>
-          <div className="min-h-screen bg-background">
+          <div className="min-h-screen bg-background flex flex-col">
             <Navbar />
-            <main>
+            <main className="flex-1">
               <Router />
             </main>
+            <footer className="border-t py-4 mt-8">
+              <div className="container mx-auto px-4 text-center">
+                <p className="text-sm text-muted-foreground">
+                  Not affiliated or endorsed by Menlo School
+                </p>
+              </div>
+            </footer>
           </div>
           <Toaster />
         </AuthProvider>
