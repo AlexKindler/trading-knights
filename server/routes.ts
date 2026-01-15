@@ -1,16 +1,575 @@
-import type { Express } from "express";
+import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
+import session from "express-session";
+import MemoryStore from "memorystore";
 import { storage } from "./storage";
+import { insertUserSchema, loginSchema, insertTradeSchema, insertCommentSchema, insertReportSchema } from "@shared/schema";
+import { createHash } from "crypto";
+
+// Extend express-session types
+declare module "express-session" {
+  interface SessionData {
+    userId?: string;
+  }
+}
+
+const SessionStore = MemoryStore(session);
+
+function hashPassword(password: string): string {
+  return createHash("sha256").update(password).digest("hex");
+}
+
+// Middleware to require authentication
+function requireAuth(req: Request, res: Response, next: NextFunction) {
+  if (!req.session.userId) {
+    return res.status(401).json({ message: "Authentication required" });
+  }
+  next();
+}
+
+// Middleware to require verified user
+async function requireVerified(req: Request, res: Response, next: NextFunction) {
+  if (!req.session.userId) {
+    return res.status(401).json({ message: "Authentication required" });
+  }
+  const user = await storage.getUser(req.session.userId);
+  if (!user || user.status !== "VERIFIED") {
+    return res.status(403).json({ message: "Email verification required" });
+  }
+  next();
+}
+
+// Middleware to require admin
+async function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  if (!req.session.userId) {
+    return res.status(401).json({ message: "Authentication required" });
+  }
+  const user = await storage.getUser(req.session.userId);
+  if (!user || user.role !== "ADMIN") {
+    return res.status(403).json({ message: "Admin access required" });
+  }
+  next();
+}
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
-  // put application routes here
-  // prefix all routes with /api
+  // Session middleware
+  app.use(
+    session({
+      secret: process.env.SESSION_SECRET || "campus-kalshi-secret-key",
+      resave: false,
+      saveUninitialized: false,
+      store: new SessionStore({
+        checkPeriod: 86400000,
+      }),
+      cookie: {
+        secure: false,
+        httpOnly: true,
+        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+      },
+    })
+  );
 
-  // use storage to perform CRUD operations on the storage interface
-  // e.g. storage.insertUser(user) or storage.getUserByUsername(username)
+  // ==================== AUTH ROUTES ====================
+
+  app.post("/api/auth/register", async (req, res) => {
+    try {
+      const parsed = insertUserSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: parsed.error.errors[0].message });
+      }
+
+      const existing = await storage.getUserByEmail(parsed.data.email);
+      if (existing) {
+        return res.status(400).json({ message: "Email already registered" });
+      }
+
+      const user = await storage.createUser(parsed.data);
+      const token = await storage.createVerificationToken(user.id);
+
+      // In dev mode, log the verification link
+      console.log("\n========================================");
+      console.log("📧 VERIFICATION LINK (Dev Mode):");
+      console.log(`   http://localhost:5000/verify-email?token=${token}`);
+      console.log("========================================\n");
+
+      req.session.userId = user.id;
+      res.json({ user: { ...user, password: undefined } });
+    } catch (error) {
+      console.error("Registration error:", error);
+      res.status(500).json({ message: "Registration failed" });
+    }
+  });
+
+  app.post("/api/auth/login", async (req, res) => {
+    try {
+      const parsed = loginSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid credentials" });
+      }
+
+      const user = await storage.getUserByEmail(parsed.data.email);
+      if (!user) {
+        return res.status(401).json({ message: "Invalid credentials" });
+      }
+
+      const hashedPassword = hashPassword(parsed.data.password);
+      if (user.password !== hashedPassword) {
+        return res.status(401).json({ message: "Invalid credentials" });
+      }
+
+      if (user.status === "SUSPENDED") {
+        return res.status(403).json({ message: "Account suspended" });
+      }
+
+      req.session.userId = user.id;
+      res.json({ user: { ...user, password: undefined } });
+    } catch (error) {
+      console.error("Login error:", error);
+      res.status(500).json({ message: "Login failed" });
+    }
+  });
+
+  app.post("/api/auth/logout", (req, res) => {
+    req.session.destroy(() => {
+      res.json({ success: true });
+    });
+  });
+
+  app.get("/api/auth/me", async (req, res) => {
+    if (!req.session.userId) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+    const user = await storage.getUser(req.session.userId);
+    if (!user) {
+      return res.status(401).json({ message: "User not found" });
+    }
+    res.json({ user: { ...user, password: undefined } });
+  });
+
+  app.post("/api/auth/verify-email", async (req, res) => {
+    try {
+      const { token } = req.body;
+      if (!token) {
+        return res.status(400).json({ message: "Token required" });
+      }
+
+      const user = await storage.verifyToken(token);
+      if (!user) {
+        return res.status(400).json({ message: "Invalid or expired token" });
+      }
+
+      req.session.userId = user.id;
+      res.json({ user: { ...user, password: undefined } });
+    } catch (error) {
+      console.error("Verification error:", error);
+      res.status(500).json({ message: "Verification failed" });
+    }
+  });
+
+  app.post("/api/auth/resend-verification", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      if (user.status === "VERIFIED") {
+        return res.status(400).json({ message: "Already verified" });
+      }
+
+      const token = await storage.createVerificationToken(user.id);
+
+      console.log("\n========================================");
+      console.log("📧 VERIFICATION LINK (Resend - Dev Mode):");
+      console.log(`   http://localhost:5000/verify-email?token=${token}`);
+      console.log("========================================\n");
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Resend verification error:", error);
+      res.status(500).json({ message: "Failed to resend verification" });
+    }
+  });
+
+  // ==================== MARKETS ROUTES ====================
+
+  app.get("/api/markets", async (req, res) => {
+    try {
+      const markets = await storage.getMarkets("PREDICTION");
+      res.json(markets);
+    } catch (error) {
+      console.error("Get markets error:", error);
+      res.status(500).json({ message: "Failed to fetch markets" });
+    }
+  });
+
+  app.get("/api/markets/:id", async (req, res) => {
+    try {
+      const market = await storage.getMarket(req.params.id);
+      if (!market) {
+        return res.status(404).json({ message: "Market not found" });
+      }
+      res.json(market);
+    } catch (error) {
+      console.error("Get market error:", error);
+      res.status(500).json({ message: "Failed to fetch market" });
+    }
+  });
+
+  app.get("/api/markets/:id/comments", async (req, res) => {
+    try {
+      const comments = await storage.getCommentsByMarket(req.params.id);
+      res.json(comments);
+    } catch (error) {
+      console.error("Get comments error:", error);
+      res.status(500).json({ message: "Failed to fetch comments" });
+    }
+  });
+
+  // ==================== STOCKS ROUTES ====================
+
+  app.get("/api/stocks", async (req, res) => {
+    try {
+      const stocks = await storage.getMarkets("STOCK");
+      res.json(stocks);
+    } catch (error) {
+      console.error("Get stocks error:", error);
+      res.status(500).json({ message: "Failed to fetch stocks" });
+    }
+  });
+
+  app.get("/api/stocks/:id", async (req, res) => {
+    try {
+      const stock = await storage.getMarket(req.params.id);
+      if (!stock || stock.type !== "STOCK") {
+        return res.status(404).json({ message: "Stock not found" });
+      }
+      res.json(stock);
+    } catch (error) {
+      console.error("Get stock error:", error);
+      res.status(500).json({ message: "Failed to fetch stock" });
+    }
+  });
+
+  app.get("/api/stocks/:id/comments", async (req, res) => {
+    try {
+      const comments = await storage.getCommentsByMarket(req.params.id);
+      res.json(comments);
+    } catch (error) {
+      console.error("Get comments error:", error);
+      res.status(500).json({ message: "Failed to fetch comments" });
+    }
+  });
+
+  // ==================== TRADING ROUTES ====================
+
+  app.post("/api/trades", requireVerified, async (req, res) => {
+    try {
+      const parsed = insertTradeSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: parsed.error.errors[0].message });
+      }
+
+      const { marketId, outcomeId, side, qty } = parsed.data;
+      const user = await storage.getUser(req.session.userId!);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      const market = await storage.getMarket(marketId);
+      if (!market || market.status !== "OPEN") {
+        return res.status(400).json({ message: "Market not available for trading" });
+      }
+
+      // Get current price
+      let currentPrice: number;
+      if (market.type === "PREDICTION" && outcomeId) {
+        const outcomes = market.outcomes;
+        const outcome = outcomes?.find((o) => o.id === outcomeId);
+        if (!outcome) {
+          return res.status(400).json({ message: "Outcome not found" });
+        }
+        currentPrice = outcome.currentPrice;
+      } else if (market.type === "STOCK") {
+        const stockMeta = market.stockMeta;
+        if (!stockMeta) {
+          return res.status(400).json({ message: "Stock not found" });
+        }
+        currentPrice = stockMeta.currentPrice;
+      } else {
+        return res.status(400).json({ message: "Invalid trade" });
+      }
+
+      const total = qty * currentPrice;
+
+      // Check balance for buy
+      if (side === "BUY") {
+        if (user.balance < total) {
+          return res.status(400).json({ message: "Insufficient balance" });
+        }
+      }
+
+      // Check position for sell
+      if (side === "SELL") {
+        const position = await storage.getPosition(user.id, marketId, outcomeId);
+        if (!position || position.qty < qty) {
+          return res.status(400).json({ message: "Insufficient shares" });
+        }
+      }
+
+      // Execute trade
+      const trade = await storage.createTrade({
+        userId: user.id,
+        marketId,
+        outcomeId: outcomeId || null,
+        side,
+        qty,
+        price: currentPrice,
+        total,
+      });
+
+      // Update user balance
+      const newBalance =
+        side === "BUY" ? user.balance - total : user.balance + total;
+      await storage.updateUser(user.id, { balance: newBalance });
+
+      // Log balance event
+      await storage.logBalanceEvent({
+        userId: user.id,
+        type: "TRADE",
+        amount: side === "BUY" ? -total : total,
+        note: `${side} ${qty} shares at $${currentPrice.toFixed(2)}`,
+      });
+
+      // Update position
+      const existingPosition = await storage.getPosition(user.id, marketId, outcomeId);
+      if (side === "BUY") {
+        if (existingPosition) {
+          const newQty = existingPosition.qty + qty;
+          const newAvgCost =
+            (existingPosition.qty * existingPosition.avgCost + qty * currentPrice) /
+            newQty;
+          await storage.upsertPosition({
+            userId: user.id,
+            marketId,
+            outcomeId: outcomeId || null,
+            qty: newQty,
+            avgCost: newAvgCost,
+          });
+        } else {
+          await storage.upsertPosition({
+            userId: user.id,
+            marketId,
+            outcomeId: outcomeId || null,
+            qty,
+            avgCost: currentPrice,
+          });
+        }
+      } else {
+        // SELL
+        if (existingPosition) {
+          const newQty = existingPosition.qty - qty;
+          await storage.upsertPosition({
+            userId: user.id,
+            marketId,
+            outcomeId: outcomeId || null,
+            qty: newQty,
+            avgCost: existingPosition.avgCost,
+          });
+        }
+      }
+
+      // Simple AMM price update
+      if (market.type === "PREDICTION" && outcomeId) {
+        const priceChange = side === "BUY" ? 0.02 : -0.02;
+        const outcome = market.outcomes?.find((o) => o.id === outcomeId);
+        if (outcome) {
+          const newPrice = Math.max(0.01, Math.min(0.99, outcome.currentPrice + priceChange));
+          await storage.updateOutcome(outcomeId, { currentPrice: newPrice });
+
+          // Update opposite outcome
+          const otherOutcome = market.outcomes?.find((o) => o.id !== outcomeId);
+          if (otherOutcome) {
+            await storage.updateOutcome(otherOutcome.id, { currentPrice: 1 - newPrice });
+          }
+        }
+      } else if (market.type === "STOCK") {
+        const priceChange = side === "BUY" ? currentPrice * 0.01 : -currentPrice * 0.01;
+        await storage.updateStockMeta(marketId, {
+          currentPrice: Math.max(0.01, currentPrice + priceChange),
+        });
+      }
+
+      // Check for bankruptcy reset
+      const updatedUser = await storage.getUser(user.id);
+      if (updatedUser && updatedUser.balance <= 0) {
+        const canReset =
+          !updatedUser.lastBankruptcyReset ||
+          Date.now() - new Date(updatedUser.lastBankruptcyReset).getTime() >
+            24 * 60 * 60 * 1000;
+        if (canReset) {
+          await storage.updateUser(user.id, {
+            balance: 100,
+            lastBankruptcyReset: new Date(),
+          });
+          await storage.logBalanceEvent({
+            userId: user.id,
+            type: "BANKRUPTCY_RESET",
+            amount: 100,
+            note: "Automatic bankruptcy reset",
+          });
+        }
+      }
+
+      res.json({ trade, newBalance });
+    } catch (error) {
+      console.error("Trade error:", error);
+      res.status(500).json({ message: "Trade failed" });
+    }
+  });
+
+  // ==================== PORTFOLIO ROUTES ====================
+
+  app.get("/api/portfolio", requireAuth, async (req, res) => {
+    try {
+      const portfolio = await storage.getPortfolio(req.session.userId!);
+      res.json(portfolio);
+    } catch (error) {
+      console.error("Get portfolio error:", error);
+      res.status(500).json({ message: "Failed to fetch portfolio" });
+    }
+  });
+
+  // ==================== LEADERBOARD ROUTES ====================
+
+  app.get("/api/leaderboard", async (req, res) => {
+    try {
+      const timeFilter = req.query.timeFilter as string | undefined;
+      const leaderboard = await storage.getLeaderboard(timeFilter);
+      res.json(leaderboard);
+    } catch (error) {
+      console.error("Get leaderboard error:", error);
+      res.status(500).json({ message: "Failed to fetch leaderboard" });
+    }
+  });
+
+  app.get("/api/leaderboard/:timeFilter", async (req, res) => {
+    try {
+      const leaderboard = await storage.getLeaderboard(req.params.timeFilter);
+      res.json(leaderboard);
+    } catch (error) {
+      console.error("Get leaderboard error:", error);
+      res.status(500).json({ message: "Failed to fetch leaderboard" });
+    }
+  });
+
+  // ==================== COMMENTS ROUTES ====================
+
+  app.post("/api/comments", requireVerified, async (req, res) => {
+    try {
+      const parsed = insertCommentSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: parsed.error.errors[0].message });
+      }
+
+      const comment = await storage.createComment({
+        userId: req.session.userId!,
+        marketId: parsed.data.marketId,
+        text: parsed.data.text,
+      });
+
+      res.json(comment);
+    } catch (error) {
+      console.error("Create comment error:", error);
+      res.status(500).json({ message: "Failed to create comment" });
+    }
+  });
+
+  // ==================== REPORTS ROUTES ====================
+
+  app.post("/api/reports", requireVerified, async (req, res) => {
+    try {
+      const parsed = insertReportSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: parsed.error.errors[0].message });
+      }
+
+      const report = await storage.createReport({
+        reporterId: req.session.userId!,
+        targetType: parsed.data.targetType,
+        targetId: parsed.data.targetId,
+        reason: parsed.data.reason,
+      });
+
+      res.json(report);
+    } catch (error) {
+      console.error("Create report error:", error);
+      res.status(500).json({ message: "Failed to create report" });
+    }
+  });
+
+  // ==================== ADMIN ROUTES ====================
+
+  app.get("/api/admin/users", requireAdmin, async (req, res) => {
+    try {
+      const users = await storage.getAllUsers();
+      res.json(users.map((u) => ({ ...u, password: undefined })));
+    } catch (error) {
+      console.error("Get users error:", error);
+      res.status(500).json({ message: "Failed to fetch users" });
+    }
+  });
+
+  app.post("/api/admin/users/:id/suspend", requireAdmin, async (req, res) => {
+    try {
+      const user = await storage.updateUser(req.params.id, { status: "SUSPENDED" });
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      res.json({ ...user, password: undefined });
+    } catch (error) {
+      console.error("Suspend user error:", error);
+      res.status(500).json({ message: "Failed to suspend user" });
+    }
+  });
+
+  app.get("/api/admin/reports", requireAdmin, async (req, res) => {
+    try {
+      const reports = await storage.getReports();
+      res.json(reports);
+    } catch (error) {
+      console.error("Get reports error:", error);
+      res.status(500).json({ message: "Failed to fetch reports" });
+    }
+  });
+
+  app.post("/api/admin/reports/:id/resolve", requireAdmin, async (req, res) => {
+    try {
+      const { action } = req.body;
+      const status = action === "dismiss" ? "DISMISSED" : "REVIEWED";
+      const report = await storage.updateReport(req.params.id, { status });
+      if (!report) {
+        return res.status(404).json({ message: "Report not found" });
+      }
+      res.json(report);
+    } catch (error) {
+      console.error("Resolve report error:", error);
+      res.status(500).json({ message: "Failed to resolve report" });
+    }
+  });
+
+  app.get("/api/admin/markets/pending", requireAdmin, async (req, res) => {
+    try {
+      // For now, just return empty array as we don't have pending approval flow
+      res.json([]);
+    } catch (error) {
+      console.error("Get pending markets error:", error);
+      res.status(500).json({ message: "Failed to fetch pending markets" });
+    }
+  });
 
   return httpServer;
 }
