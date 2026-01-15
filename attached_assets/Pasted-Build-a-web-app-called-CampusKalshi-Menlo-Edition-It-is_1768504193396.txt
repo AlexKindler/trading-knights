@@ -1,0 +1,148 @@
+Build a web app called CampusKalshi (Menlo Edition). It is school-only, uses fake money only, and is for education + fun (NO real-money gambling, NO cash-out, NO prizes, NO payments). Access is restricted to verified @menloschool.org emails. Two modules: prediction markets + fake stock market.
+
+Hard requirements
+
+School-only + verification
+	•	Only allow accounts with email ending in @menloschool.org.
+	•	Require email verification before any write actions: trading, creating markets/listings, commenting, reporting, portfolio view (beyond read-only browse).
+	•	Verification token: single-use, expires in 24 hours, stored hashed.
+	•	If email sending is not configured, run “dev mode” that logs the verification link to server output, but verification is still required.
+
+Money rules
+	•	Starting balance: 1000 play dollars only after verification.
+	•	Bankruptcy reset: if a user’s cash balance reaches 0, auto-set cash to 100.
+	•	Add a cooldown: at most one bankruptcy reset per 24 hours.
+	•	Log all balance changes.
+
+Modules
+
+1) Prediction Markets (Kalshi-style, school-safe)
+	•	Students create events about school-relevant outcomes (sports results, club elections, spirit week themes, test-average ranges, attendance tiers, etc.).
+	•	Each event includes: title, description, category, close time, resolve time, resolution rule/source.
+	•	Outcomes: YES/NO or multiple choice.
+	•	Trading uses play dollars. Outcome prices range $0.01–$0.99.
+	•	Use an automated market maker (AMM) model (simpler than order book). Implement cleanly and consistently.
+	•	Users can buy/sell shares until market close.
+	•	After resolve time, an admin resolves the event:
+	•	Winning shares pay $1 each; losing shares pay $0.
+	•	Pages:
+	•	Market directory + search/filter (category, closing soon, newest)
+	•	Market detail: chart, trade widget, rules, comments
+	•	Portfolio: positions, cash, P/L, history
+
+2) Fake Stock Market (student-created listings)
+	•	Students create “stocks” for school-related things (clubs, teams, events, cafeteria items, etc.). Enforce school appropriateness.
+	•	Listing includes: ticker (3–5 chars), name, description, category, creator, initial price, initial float/supply.
+	•	Trading uses play dollars via the same AMM approach (single-asset AMM).
+	•	Show:
+	•	Listings directory + top movers + volume + market cap (fake)
+	•	Listing detail: chart, buy/sell, stats, discussion
+	•	Combined portfolio (prediction positions + stocks)
+
+Guardrails (must implement)
+	•	Fake money only: no payments, no prizes, no exchanges.
+	•	Onboarding disclaimer + required acceptance.
+	•	Content moderation:
+	•	Report button on markets/listings/comments.
+	•	Admin dashboard to hide/delete content + suspend users.
+	•	Basic profanity/harassment filter.
+	•	Privacy:
+	•	Public profiles show display name (and optional grade), never email.
+	•	Safety bans:
+	•	No markets about self-harm, violence, doxxing, private/personal outcomes, or individual private info.
+	•	Restrict to public, school-sanctioned outcomes.
+
+Roles
+	•	Student: trade, create markets/listings (within limits), comment, report.
+	•	Admin/Moderator: approve markets/listings (optional toggle), resolve markets, manage reports/users, adjust balances.
+
+Limits
+	•	New user: $1000 after verification.
+	•	Daily trade count limit and per-trade max spend.
+	•	Creation limits: max 3 active prediction markets per user; max 5 stock listings.
+	•	Anti-manipulation:
+	•	cooldown on selling right after buying
+	•	optional admin-approval for new listings/markets
+
+Tech (Replit-friendly)
+	•	Backend: Node.js + Express
+	•	DB: SQLite
+	•	Frontend: React (Vite)
+	•	Auth: email+password + session/JWT.
+	•	Email verification: SMTP or transactional email API via environment variables.
+
+Database schema (minimum)
+
+users
+	•	id, email, displayName, role (STUDENT|ADMIN), status (PENDING_VERIFICATION|VERIFIED|SUSPENDED)
+	•	emailVerifiedAt (nullable), balance (integer, default 0), createdAt
+
+email_verification_tokens
+	•	id, userId, tokenHash, expiresAt, usedAt
+
+markets
+	•	id, type (PREDICTION|STOCK)
+	•	title, description, category, status (OPEN|CLOSED|RESOLVED|HIDDEN)
+	•	closeAt, resolveAt (prediction only), createdBy, createdAt
+
+outcomes (prediction only)
+	•	id, marketId, label, currentPrice
+
+listings_meta (stock only)
+	•	marketId (FK markets.id), ticker, initialPrice, floatSupply, virtualLiquidityParams
+
+trades
+	•	id, userId, marketId, outcomeId (nullable for stock), side (BUY|SELL)
+	•	qty, price, total, createdAt
+
+positions
+	•	id, userId, marketId, outcomeId (nullable for stock)
+	•	qty, avgCost
+
+price_snapshots
+	•	id, marketId, outcomeId nullable, price, volume, timestamp
+
+comments
+	•	id, userId, marketId, text, createdAt, hiddenAt
+
+reports
+	•	id, reporterId, targetType (MARKET|COMMENT|USER), targetId, reason, status, createdAt
+
+resolutions (prediction only)
+	•	marketId, resolvedBy, winningOutcomeId, note, resolvedAt
+
+balance_events
+	•	id, userId, type (STARTING_CREDIT|BANKRUPTCY_RESET|ADMIN_ADJUST)
+	•	amount, note, createdAt
+
+Backend rules (enforce server-side)
+	•	Reject any registration/login email not ending with @menloschool.org.
+	•	Block all write routes unless users.status === VERIFIED.
+	•	Verify endpoint:
+	•	validate token, set VERIFIED, set emailVerifiedAt, credit +1000, log STARTING_CREDIT.
+	•	Trading endpoint:
+	•	update balance/positions atomically in a transaction.
+	•	after any trade, if balance == 0 and last bankruptcy reset > 24h ago: set balance = 100, log BANKRUPTCY_RESET.
+	•	Admin-only routes:
+	•	resolve prediction markets, hide content, suspend users, adjust balances.
+
+Frontend pages
+	•	Register/Login + disclaimer acceptance
+	•	“Check your email” verification waiting page
+	•	Home: tabs for Prediction / Stocks
+	•	Directory pages with filters/search
+	•	Detail page: chart + trade + rules + comments
+	•	Portfolio + transaction history
+	•	Admin panel: resolve markets, reports queue, user management
+
+Deliverables
+	•	Working app with seed data:
+	•	5 prediction markets, 8 stock listings
+	•	2 demo accounts: admin + student (student must still go through verification in dev mode)
+	•	Clean UI
+	•	README:
+	•	run instructions
+	•	how to configure email provider env vars (or dev-mode verification link in logs)
+	•	fake-money-only policy and content rules
+
+Build order: project scaffold → auth + email verification + balance rules → DB schema + API routes → AMM trading engine → frontend pages → admin tools → polish.
