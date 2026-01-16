@@ -75,7 +75,7 @@ export default function Register() {
             </div>
             <CardTitle className="text-2xl">Create an account</CardTitle>
             <CardDescription>
-              Join CampusKalshi with your Menlo School email
+              Join Menlo Market with your Menlo School email
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -224,7 +224,7 @@ export default function Register() {
             </div>
 
             <div className="space-y-3">
-              <p><strong>By using CampusKalshi, you agree that:</strong></p>
+              <p><strong>By using Menlo Market, you agree that:</strong></p>
               <ul className="list-inside list-disc space-y-2 text-muted-foreground">
                 <li>All trading is done with virtual play money only</li>
                 <li>This is an educational simulation, not real gambling</li>
