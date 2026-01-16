@@ -191,43 +191,38 @@ export class MemStorage implements IStorage {
       });
     });
 
-    // Create prediction markets
+    // Create prediction markets - Club-based and school events
     const predictionMarkets = [
-      {
-        title: "Will the basketball team win the championship?",
-        description: "This market resolves YES if the Menlo basketball team wins the state championship this season.",
-        category: "Sports",
-        closeAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-        resolutionRule: "Based on official game results",
-      },
-      {
-        title: "Will the spring musical sell out opening night?",
-        description: "Resolves YES if all tickets for opening night are sold before the show.",
-        category: "Events",
-        closeAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
-        resolutionRule: "Based on ticket sales records",
-      },
-      {
-        title: "Will the average AP Calc score be above 4.0?",
-        description: "This market resolves YES if the class average on the AP Calculus exam exceeds 4.0.",
-        category: "Academics",
-        closeAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000),
-        resolutionRule: "Based on College Board results",
-      },
-      {
-        title: "Who will win student body president?",
-        description: "Predict the outcome of the upcoming student body elections.",
-        category: "Elections",
-        closeAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-        resolutionRule: "Based on official election results",
-      },
-      {
-        title: "Will Spirit Week have over 80% participation?",
-        description: "Resolves YES if more than 80% of students participate in at least one Spirit Week event.",
-        category: "Events",
-        closeAt: new Date(Date.now() + 21 * 24 * 60 * 60 * 1000),
-        resolutionRule: "Based on attendance records",
-      },
+      // Club Performance Markets
+      { title: "Will Menlo Robotics win at VEX States?", description: "Resolves YES if Menlo Robotics Club places 1st at the VEX State Championship.", category: "Clubs", closeAt: new Date(Date.now() + 45 * 24 * 60 * 60 * 1000), resolutionRule: "Based on official VEX competition results" },
+      { title: "Will Drama Club's spring show sell out?", description: "Resolves YES if all tickets for Drama Club's spring production are sold.", category: "Clubs", closeAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), resolutionRule: "Based on ticket sales records" },
+      { title: "Will Model UN win Best Delegation?", description: "Resolves YES if Menlo Model UN wins Best Delegation at the next major conference.", category: "Clubs", closeAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000), resolutionRule: "Based on official MUN awards" },
+      { title: "Will Parliamentary Debate reach nationals?", description: "Resolves YES if Menlo's debate team qualifies for the national tournament.", category: "Clubs", closeAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000), resolutionRule: "Based on qualification results" },
+      { title: "Will DECA advance to ICDC?", description: "Resolves YES if any Menlo DECA member qualifies for the International Career Development Conference.", category: "Clubs", closeAt: new Date(Date.now() + 75 * 24 * 60 * 60 * 1000), resolutionRule: "Based on DECA competition results" },
+      { title: "Will Engineering Club finish their go-kart?", description: "Resolves YES if Engineering Club completes their electric go-kart project this semester.", category: "Clubs", closeAt: new Date(Date.now() + 120 * 24 * 60 * 60 * 1000), resolutionRule: "Based on club announcement" },
+      { title: "Will TEDx Menlo have 200+ attendees?", description: "Resolves YES if TEDx Menlo event has over 200 attendees.", category: "Clubs", closeAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000), resolutionRule: "Based on event attendance records" },
+      { title: "Will Beekeeping harvest 50+ lbs of honey?", description: "Resolves YES if the Beekeeping Club harvests more than 50 pounds of honey this season.", category: "Clubs", closeAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000), resolutionRule: "Based on harvest records" },
+      { title: "Will Girls Who Code host a hackathon?", description: "Resolves YES if Girls Who Code organizes and hosts a hackathon this semester.", category: "Clubs", closeAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000), resolutionRule: "Based on event occurrence" },
+      { title: "Will Anime Club get 50+ members?", description: "Resolves YES if Anime Club reaches 50 or more active members.", category: "Clubs", closeAt: new Date(Date.now() + 45 * 24 * 60 * 60 * 1000), resolutionRule: "Based on club roster" },
+      { title: "Will STAR win at Science Olympiad regionals?", description: "Resolves YES if STAR places top 3 at Science Olympiad regionals.", category: "Clubs", closeAt: new Date(Date.now() + 50 * 24 * 60 * 60 * 1000), resolutionRule: "Based on competition results" },
+      { title: "Will Fashion Club's clothing swap have 100+ items?", description: "Resolves YES if the next Fashion Club clothing swap has over 100 items donated.", category: "Clubs", closeAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), resolutionRule: "Based on item count" },
+      { title: "Will K-pop Club host a dance cover event?", description: "Resolves YES if K-pop Club performs a dance cover at a school event.", category: "Clubs", closeAt: new Date(Date.now() + 45 * 24 * 60 * 60 * 1000), resolutionRule: "Based on event occurrence" },
+      { title: "Will Menlo Fishing Club catch a 10lb+ fish?", description: "Resolves YES if any club member catches a fish weighing 10 pounds or more.", category: "Clubs", closeAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000), resolutionRule: "Based on verified catch" },
+      { title: "Will Climate Coalition plant 100+ trees?", description: "Resolves YES if Climate Coalition plants over 100 trees during EcoAct Week.", category: "Clubs", closeAt: new Date(Date.now() + 40 * 24 * 60 * 60 * 1000), resolutionRule: "Based on planting records" },
+      { title: "Will Video Game Club win the esports tournament?", description: "Resolves YES if Video Game Club wins first place in the inter-school esports tournament.", category: "Clubs", closeAt: new Date(Date.now() + 35 * 24 * 60 * 60 * 1000), resolutionRule: "Based on tournament results" },
+      { title: "Will Menlo LitMag publish by spring?", description: "Resolves YES if Menlo's literary magazine is published before spring break.", category: "Clubs", closeAt: new Date(Date.now() + 75 * 24 * 60 * 60 * 1000), resolutionRule: "Based on publication date" },
+      { title: "Will A Capella perform at assembly?", description: "Resolves YES if Menlo A Capella Club performs at a school-wide assembly this semester.", category: "Clubs", closeAt: new Date(Date.now() + 50 * 24 * 60 * 60 * 1000), resolutionRule: "Based on assembly schedule" },
+      { title: "Will Physics Club launch a successful rocket?", description: "Resolves YES if Physics Club successfully launches and recovers a model rocket.", category: "Clubs", closeAt: new Date(Date.now() + 40 * 24 * 60 * 60 * 1000), resolutionRule: "Based on launch outcome" },
+      { title: "Will Red Cross raise $5000+ this semester?", description: "Resolves YES if Red Cross Club raises over $5000 for disaster relief.", category: "Clubs", closeAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000), resolutionRule: "Based on fundraising records" },
+      { title: "Will Outdoor Club summit Mt. Tam?", description: "Resolves YES if Outdoor Club successfully completes a group hike to Mt. Tamalpais summit.", category: "Clubs", closeAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), resolutionRule: "Based on trip completion" },
+      { title: "Will Trivia Club win Quiz Bowl regionals?", description: "Resolves YES if Menlo Trivia Club places 1st at Quiz Bowl regionals.", category: "Clubs", closeAt: new Date(Date.now() + 55 * 24 * 60 * 60 * 1000), resolutionRule: "Based on competition results" },
+      { title: "Will HOSA qualify for nationals?", description: "Resolves YES if any HOSA member qualifies for the national competition.", category: "Clubs", closeAt: new Date(Date.now() + 70 * 24 * 60 * 60 * 1000), resolutionRule: "Based on HOSA results" },
+      { title: "Will JCL win at state convention?", description: "Resolves YES if Menlo JCL wins any award at the California state convention.", category: "Clubs", closeAt: new Date(Date.now() + 65 * 24 * 60 * 60 * 1000), resolutionRule: "Based on convention results" },
+      { title: "Will Business Club launch a student startup?", description: "Resolves YES if Business & Entrepreneurship Club helps launch an actual student business.", category: "Clubs", closeAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000), resolutionRule: "Based on business launch" },
+      // School-wide Events
+      { title: "Will Spirit Week have 80%+ participation?", description: "Resolves YES if more than 80% of students participate in at least one Spirit Week event.", category: "Events", closeAt: new Date(Date.now() + 21 * 24 * 60 * 60 * 1000), resolutionRule: "Based on attendance records" },
+      { title: "Will the average AP Calc score be above 4.0?", description: "Resolves YES if the class average on AP Calculus exam exceeds 4.0.", category: "Academics", closeAt: new Date(Date.now() + 120 * 24 * 60 * 60 * 1000), resolutionRule: "Based on College Board results" },
+      { title: "Who will win student body president?", description: "Predict the outcome of the upcoming student body elections.", category: "Elections", closeAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000), resolutionRule: "Based on official election results" },
     ];
 
     predictionMarkets.forEach((m) => {
