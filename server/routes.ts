@@ -856,6 +856,11 @@ export async function registerRoutes(
     }
   });
 
+  const MK_AI_DEVELOPER_EMAILS = [
+    "alex.kindler@menloschool.org",
+    "lincoln.bott@menloschool.org",
+  ];
+
   app.post("/api/mk-ai/purchase", requireVerified, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
@@ -883,6 +888,21 @@ export async function registerRoutes(
         amount: -MK_AI_PRICE,
         note: "Purchased MK AI access",
       });
+
+      const sharePerDeveloper = Math.floor(MK_AI_PRICE / MK_AI_DEVELOPER_EMAILS.length);
+      for (const devEmail of MK_AI_DEVELOPER_EMAILS) {
+        const developer = await storage.getUserByEmail(devEmail);
+        if (developer) {
+          const devNewBalance = developer.balance + sharePerDeveloper;
+          await storage.updateUser(developer.id, { balance: devNewBalance });
+          await storage.logBalanceEvent({
+            userId: developer.id,
+            type: "ADMIN_ADJUST",
+            amount: sharePerDeveloper,
+            note: `MK AI revenue share from ${user.email}`,
+          });
+        }
+      }
 
       res.json({ success: true, newBalance, hasAccess: true });
     } catch (error) {
