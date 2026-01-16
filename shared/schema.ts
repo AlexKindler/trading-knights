@@ -10,6 +10,8 @@ export type MarketType = "PREDICTION" | "STOCK";
 export type MarketStatus = "OPEN" | "CLOSED" | "RESOLVED" | "HIDDEN";
 export type TradeSide = "BUY" | "SELL";
 export type BalanceEventType = "STARTING_CREDIT" | "BANKRUPTCY_RESET" | "ADMIN_ADJUST" | "TRADE" | "MK_AI_PURCHASE";
+export type GameStatus = "UPCOMING" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED";
+export type SportType = "BASKETBALL" | "FOOTBALL" | "SOCCER" | "BASEBALL" | "VOLLEYBALL" | "TENNIS" | "SWIMMING" | "TRACK" | "OTHER";
 export type ReportTargetType = "MARKET" | "COMMENT" | "USER";
 export type ReportStatus = "PENDING" | "REVIEWED" | "DISMISSED";
 
@@ -181,6 +183,21 @@ export const balanceEvents = pgTable("balance_events", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// Games (for sports betting markets)
+export const games = pgTable("games", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sport: text("sport").notNull(),
+  opponent: text("opponent").notNull(),
+  isHome: boolean("is_home").notNull().default(true),
+  gameDate: timestamp("game_date").notNull(),
+  status: text("status").notNull().default("UPCOMING"),
+  menloScore: integer("menlo_score"),
+  opponentScore: integer("opponent_score"),
+  marketId: varchar("market_id"),
+  createdBy: varchar("created_by").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
 // Zod schemas
 export const insertUserSchema = createInsertSchema(users).pick({
   email: true,
@@ -238,6 +255,13 @@ export const insertReportSchema = z.object({
   reason: z.string().min(10).max(500),
 });
 
+export const insertGameSchema = z.object({
+  sport: z.enum(["BASKETBALL", "FOOTBALL", "SOCCER", "BASEBALL", "VOLLEYBALL", "TENNIS", "SWIMMING", "TRACK", "OTHER"]),
+  opponent: z.string().min(1),
+  isHome: z.boolean(),
+  gameDate: z.string().transform((s) => new Date(s)),
+});
+
 // Types
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
@@ -253,6 +277,7 @@ export type BalanceEvent = typeof balanceEvents.$inferSelect;
 export type PriceSnapshot = typeof priceSnapshots.$inferSelect;
 export type StockCandle = typeof stockCandles.$inferSelect;
 export type MarketCandle = typeof marketCandles.$inferSelect;
+export type Game = typeof games.$inferSelect;
 
 // Leaderboard types
 export interface LeaderboardEntry {
