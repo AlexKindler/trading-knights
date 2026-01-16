@@ -14,6 +14,7 @@ import {
   type LeaderboardEntry,
   type PortfolioSummary,
   type PositionWithDetails,
+  type StockCandle,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { createHash } from "crypto";
@@ -72,6 +73,11 @@ export interface IStorage {
 
   // Portfolio
   getPortfolio(userId: string): Promise<PortfolioSummary>;
+
+  // Stock Candles
+  getStockCandles(marketId: string, limit?: number): Promise<StockCandle[]>;
+  addStockCandle(candle: Omit<StockCandle, "id">): Promise<StockCandle>;
+  updateLatestCandle(marketId: string, price: number, volume: number): Promise<void>;
 }
 
 export class MemStorage implements IStorage {
@@ -85,6 +91,7 @@ export class MemStorage implements IStorage {
   private comments: Map<string, Comment> = new Map();
   private reports: Map<string, Report> = new Map();
   private balanceEvents: Map<string, BalanceEvent> = new Map();
+  private stockCandles: Map<string, StockCandle[]> = new Map();
 
   constructor() {
     this.seedData();
@@ -265,6 +272,42 @@ export class MemStorage implements IStorage {
         floatSupply: 10000,
         virtualLiquidity: 100000,
       });
+
+      // Generate historical candle data for this stock
+      const candles: StockCandle[] = [];
+      let currentPrice = s.price;
+      const now = new Date();
+      
+      // Generate 30 days of candle data (one candle per day)
+      for (let i = 29; i >= 0; i--) {
+        const candleDate = new Date(now);
+        candleDate.setDate(candleDate.getDate() - i);
+        candleDate.setHours(9, 30, 0, 0);
+        
+        // Random walk for price movement
+        const volatility = 0.08;
+        const changePercent = (Math.random() - 0.5) * volatility;
+        const open = currentPrice;
+        const close = currentPrice * (1 + changePercent);
+        const high = Math.max(open, close) * (1 + Math.random() * 0.03);
+        const low = Math.min(open, close) * (1 - Math.random() * 0.03);
+        const volume = Math.floor(100 + Math.random() * 900);
+        
+        candles.push({
+          id: randomUUID(),
+          marketId,
+          open,
+          high,
+          low,
+          close,
+          volume,
+          timestamp: candleDate,
+        });
+        
+        currentPrice = close;
+      }
+      
+      this.stockCandles.set(marketId, candles);
     });
   }
 
@@ -628,6 +671,65 @@ export class MemStorage implements IStorage {
       positions: enrichedPositions,
       recentTrades: trades.slice(0, 20),
     };
+  }
+
+  async getStockCandles(marketId: string, limit: number = 100): Promise<StockCandle[]> {
+    const candles = this.stockCandles.get(marketId) || [];
+    return candles.slice(-limit).sort((a, b) => 
+      new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
+  }
+
+  async addStockCandle(candle: Omit<StockCandle, "id">): Promise<StockCandle> {
+    const id = randomUUID();
+    const newCandle: StockCandle = { ...candle, id };
+    const candles = this.stockCandles.get(candle.marketId) || [];
+    candles.push(newCandle);
+    this.stockCandles.set(candle.marketId, candles);
+    return newCandle;
+  }
+
+  async updateLatestCandle(marketId: string, price: number, volume: number): Promise<void> {
+    const candles = this.stockCandles.get(marketId) || [];
+    if (candles.length === 0) {
+      // Create a new candle if none exists
+      await this.addStockCandle({
+        marketId,
+        open: price,
+        high: price,
+        low: price,
+        close: price,
+        volume,
+        timestamp: new Date(),
+      });
+      return;
+    }
+
+    const lastCandle = candles[candles.length - 1];
+    const now = new Date();
+    const lastCandleTime = new Date(lastCandle.timestamp);
+    
+    // Check if we're still within the same trading period (same day for daily candles)
+    const isSameDay = lastCandleTime.toDateString() === now.toDateString();
+
+    if (isSameDay) {
+      // Update existing candle
+      lastCandle.close = price;
+      lastCandle.high = Math.max(lastCandle.high, price);
+      lastCandle.low = Math.min(lastCandle.low, price);
+      lastCandle.volume += volume;
+    } else {
+      // Create a new candle for the new day
+      await this.addStockCandle({
+        marketId,
+        open: price,
+        high: price,
+        low: price,
+        close: price,
+        volume,
+        timestamp: now,
+      });
+    }
   }
 }
 

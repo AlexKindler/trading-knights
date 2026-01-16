@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TradingWidget } from "@/components/TradingWidget";
+import { CandlestickChart } from "@/components/CandlestickChart";
 import {
   ArrowLeft,
   BarChart3,
@@ -16,7 +17,6 @@ import {
   MessageSquare,
 } from "lucide-react";
 import type { MarketWithDetails, Comment } from "@shared/schema";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 
 export default function StockDetail() {
   const [, params] = useRoute("/stocks/:id");
@@ -57,11 +57,6 @@ export default function StockDetail() {
     : "0";
   const isPositive = priceChange > 0;
   const isNegative = priceChange < 0;
-
-  const mockChartData = Array.from({ length: 30 }, (_, i) => ({
-    day: i + 1,
-    price: (stock?.initialPrice ?? 10) * (0.8 + Math.random() * 0.5),
-  }));
 
   if (isLoading) {
     return (
@@ -171,30 +166,7 @@ export default function StockDetail() {
                 <CardTitle>Price History</CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="h-64">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={mockChartData}>
-                      <XAxis dataKey="day" tick={{ fontSize: 12 }} />
-                      <YAxis
-                        domain={["auto", "auto"]}
-                        tickFormatter={(v) => `$${v.toFixed(0)}`}
-                        tick={{ fontSize: 12 }}
-                      />
-                      <Tooltip
-                        formatter={(value: number) => [`$${value.toFixed(2)}`]}
-                        labelFormatter={(label) => `Day ${label}`}
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="price"
-                        stroke={isPositive ? "#22c55e" : isNegative ? "#ef4444" : "#6b7280"}
-                        strokeWidth={2}
-                        dot={false}
-                        name="Price"
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
+                <CandlestickChart marketId={market.id} />
               </CardContent>
             </Card>
 

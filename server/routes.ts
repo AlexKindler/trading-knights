@@ -264,6 +264,17 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/stocks/:id/candles", async (req, res) => {
+    try {
+      const limit = parseInt(req.query.limit as string) || 100;
+      const candles = await storage.getStockCandles(req.params.id, limit);
+      res.json(candles);
+    } catch (error) {
+      console.error("Get candles error:", error);
+      res.status(500).json({ message: "Failed to fetch candles" });
+    }
+  });
+
   // ==================== TRADING ROUTES ====================
 
   app.post("/api/trades", requireVerified, async (req, res) => {
