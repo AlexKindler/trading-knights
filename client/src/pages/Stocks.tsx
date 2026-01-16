@@ -75,10 +75,10 @@ export default function Stocks() {
           <div>
             <h1 className="flex items-center gap-2 text-3xl font-bold" data-testid="text-page-title">
               <BarChart3 className="h-8 w-8 text-primary" />
-              Long-Term Investments
+              Investments
             </h1>
             <p className="mt-1 text-muted-foreground" data-testid="text-page-subtitle">
-              Invest in student-created stocks representing clubs, teams, and school entities
+              Build your portfolio with long-term holdings in school clubs and organizations
             </p>
           </div>
           {user?.status === "VERIFIED" && (
