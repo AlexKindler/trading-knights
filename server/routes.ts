@@ -883,5 +883,84 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/polymarket-markets", async (req, res) => {
+    try {
+      const markets = await storage.getPolymarketMarkets();
+      const marketsWithLinks = await Promise.all(
+        markets.map(async (market) => {
+          const link = await storage.getPolymarketLink(market.id);
+          return { ...market, polymarketLink: link };
+        })
+      );
+      res.json(marketsWithLinks);
+    } catch (error) {
+      console.error("Get polymarket markets error:", error);
+      res.status(500).json({ message: "Failed to fetch polymarket markets" });
+    }
+  });
+
+  app.post("/api/admin/import-polymarket", requireAdmin, async (req, res) => {
+    try {
+      const { title, description, slug, eventId, image } = req.body;
+      
+      if (!title || !slug || !eventId) {
+        return res.status(400).json({ message: "Missing required fields: title, slug, eventId" });
+      }
+
+      const existingMarkets = await storage.getPolymarketMarkets();
+      const alreadyImported = existingMarkets.some(async (m) => {
+        const link = await storage.getPolymarketLink(m.id);
+        return link?.polymarketEventId === eventId;
+      });
+
+      const allLinks = await Promise.all(
+        existingMarkets.map(m => storage.getPolymarketLink(m.id))
+      );
+      const existingLink = allLinks.find(l => l?.polymarketEventId === eventId);
+      
+      if (existingLink) {
+        return res.status(400).json({ message: "This event has already been imported" });
+      }
+
+      const market = await storage.createMarket({
+        type: "PREDICTION",
+        title,
+        description: description || `Imported from Polymarket: ${title}`,
+        category: "Sports",
+        status: "OPEN",
+        source: "POLYMARKET",
+        closeAt: null,
+        resolveAt: null,
+        resolutionRule: "Based on Polymarket resolution",
+        createdBy: req.session.userId!,
+      });
+
+      await storage.createOutcome({
+        marketId: market.id,
+        label: "YES",
+        currentPrice: 0.5,
+      });
+
+      await storage.createOutcome({
+        marketId: market.id,
+        label: "NO",
+        currentPrice: 0.5,
+      });
+
+      const polymarketLink = await storage.createPolymarketLink({
+        marketId: market.id,
+        polymarketEventId: eventId,
+        polymarketSlug: slug,
+        polymarketImage: image || null,
+      });
+
+      const enrichedMarket = await storage.getMarket(market.id);
+      res.json({ market: enrichedMarket, polymarketLink });
+    } catch (error) {
+      console.error("Import polymarket error:", error);
+      res.status(500).json({ message: "Failed to import polymarket event" });
+    }
+  });
+
   return httpServer;
 }

@@ -40,8 +40,10 @@ import {
   Plus,
   Trash2,
   Trophy,
+  Download,
+  ExternalLink,
 } from "lucide-react";
-import type { User, Market, Report, Game } from "@shared/schema";
+import type { User, Market, Report, Game, MarketWithDetails, PolymarketLink } from "@shared/schema";
 
 const SPORTS = [
   "BASKETBALL",
@@ -93,6 +95,28 @@ export default function Admin() {
 
   const { data: games, isLoading: gamesLoading } = useQuery<Game[]>({
     queryKey: ["/api/admin/games"],
+    enabled: user?.role === "ADMIN",
+  });
+
+  interface PolymarketEvent {
+    id: string;
+    title: string;
+    description?: string;
+    slug: string;
+    image?: string;
+  }
+
+  interface ImportedMarket extends MarketWithDetails {
+    polymarketLink?: PolymarketLink;
+  }
+
+  const { data: polymarketEvents, isLoading: polymarketEventsLoading } = useQuery<PolymarketEvent[]>({
+    queryKey: ["/api/polymarket/sports"],
+    enabled: user?.role === "ADMIN",
+  });
+
+  const { data: importedMarkets, isLoading: importedMarketsLoading } = useQuery<ImportedMarket[]>({
+    queryKey: ["/api/polymarket-markets"],
     enabled: user?.role === "ADMIN",
   });
 
@@ -192,6 +216,40 @@ export default function Admin() {
       toast({ title: "Game deleted" });
     },
   });
+
+  const importPolymarketMutation = useMutation({
+    mutationFn: async (event: PolymarketEvent) => {
+      const res = await apiRequest("POST", "/api/admin/import-polymarket", {
+        title: event.title,
+        description: event.description,
+        slug: event.slug,
+        eventId: event.id,
+        image: event.image,
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.message || "Failed to import event");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/polymarket-markets"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/markets"] });
+      toast({ title: "Event imported successfully" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const getImportedEventIds = () => {
+    if (!importedMarkets) return new Set<string>();
+    return new Set(
+      importedMarkets
+        .filter((m) => m.polymarketLink)
+        .map((m) => m.polymarketLink!.polymarketEventId)
+    );
+  };
 
   const handleCreateGame = () => {
     if (!newGame.opponent || !newGame.gameDate) {
@@ -315,6 +373,10 @@ export default function Admin() {
             <TabsTrigger value="games" className="gap-2" data-testid="tab-admin-games">
               <Calendar className="h-4 w-4" />
               Games
+            </TabsTrigger>
+            <TabsTrigger value="polymarket" className="gap-2" data-testid="tab-admin-polymarket">
+              <Download className="h-4 w-4" />
+              Polymarket Import
             </TabsTrigger>
           </TabsList>
 
@@ -701,6 +763,97 @@ export default function Admin() {
                         </div>
                       </div>
                     ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="polymarket" className="mt-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Import from Polymarket</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {polymarketEventsLoading || importedMarketsLoading ? (
+                  <div className="space-y-4">
+                    {Array.from({ length: 5 }).map((_, i) => (
+                      <Skeleton key={i} className="h-20" />
+                    ))}
+                  </div>
+                ) : !polymarketEvents?.length ? (
+                  <div className="py-8 text-center">
+                    <Trophy className="mx-auto h-12 w-12 text-muted-foreground" />
+                    <p className="mt-4 text-muted-foreground">No sports events available from Polymarket</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {polymarketEvents.map((event) => {
+                      const importedEventIds = getImportedEventIds();
+                      const isImported = importedEventIds.has(event.id);
+                      
+                      return (
+                        <div
+                          key={event.id}
+                          className="flex flex-wrap items-center justify-between gap-4 rounded-lg border p-4"
+                          data-testid={`polymarket-event-${event.id}`}
+                        >
+                          <div className="flex items-start gap-3 flex-1">
+                            {event.image && (
+                              <img
+                                src={event.image}
+                                alt={event.title}
+                                className="h-12 w-12 rounded object-cover"
+                              />
+                            )}
+                            <div className="flex-1">
+                              <p className="font-medium line-clamp-1">{event.title}</p>
+                              {event.description && (
+                                <p className="text-sm text-muted-foreground line-clamp-2 mt-1">
+                                  {event.description}
+                                </p>
+                              )}
+                              <div className="flex flex-wrap items-center gap-2 mt-2">
+                                <a
+                                  href={`https://polymarket.com/event/${event.slug}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                                  data-testid={`link-view-polymarket-${event.id}`}
+                                >
+                                  View on Polymarket
+                                  <ExternalLink className="h-3 w-3" />
+                                </a>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                            {isImported ? (
+                              <Badge variant="secondary" data-testid={`badge-imported-${event.id}`}>
+                                <CheckCircle className="mr-1 h-3 w-3" />
+                                Imported
+                              </Badge>
+                            ) : (
+                              <Button
+                                size="sm"
+                                onClick={() => importPolymarketMutation.mutate(event)}
+                                disabled={importPolymarketMutation.isPending}
+                                data-testid={`button-import-${event.id}`}
+                              >
+                                {importPolymarketMutation.isPending ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <>
+                                    <Download className="mr-1 h-4 w-4" />
+                                    Import
+                                  </>
+                                )}
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </CardContent>

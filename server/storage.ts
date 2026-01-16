@@ -17,6 +17,7 @@ import {
   type StockCandle,
   type MarketCandle,
   type Game,
+  type PolymarketLink,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { createHash } from "crypto";
@@ -95,6 +96,11 @@ export interface IStorage {
   getAllGames(): Promise<Game[]>;
   updateGame(id: string, updates: Partial<Game>): Promise<Game | undefined>;
   deleteGame(id: string): Promise<boolean>;
+
+  // Polymarket links
+  createPolymarketLink(link: Omit<PolymarketLink, "id" | "lastSynced">): Promise<PolymarketLink>;
+  getPolymarketLink(marketId: string): Promise<PolymarketLink | undefined>;
+  getPolymarketMarkets(): Promise<MarketWithDetails[]>;
 }
 
 export class MemStorage implements IStorage {
@@ -112,6 +118,7 @@ export class MemStorage implements IStorage {
   private stockCandles: Map<string, StockCandle[]> = new Map();
   private marketCandles: Map<string, MarketCandle[]> = new Map();
   private games: Map<string, Game> = new Map();
+  private polymarketLinks: Map<string, PolymarketLink> = new Map();
 
   constructor() {
     this.seedData();
@@ -882,6 +889,34 @@ export class MemStorage implements IStorage {
 
   async deleteGame(id: string): Promise<boolean> {
     return this.games.delete(id);
+  }
+
+  async createPolymarketLink(link: Omit<PolymarketLink, "id" | "lastSynced">): Promise<PolymarketLink> {
+    const id = randomUUID();
+    const newLink: PolymarketLink = {
+      ...link,
+      id,
+      lastSynced: new Date(),
+    };
+    this.polymarketLinks.set(link.marketId, newLink);
+    return newLink;
+  }
+
+  async getPolymarketLink(marketId: string): Promise<PolymarketLink | undefined> {
+    return this.polymarketLinks.get(marketId);
+  }
+
+  async getPolymarketMarkets(): Promise<MarketWithDetails[]> {
+    const polymarketMarketIds = new Set(
+      Array.from(this.polymarketLinks.values()).map((link) => link.marketId)
+    );
+    
+    const markets = Array.from(this.markets.values())
+      .filter((m) => m.source === "POLYMARKET" || polymarketMarketIds.has(m.id))
+      .filter((m) => m.status !== "HIDDEN")
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    return Promise.all(markets.map((m) => this.enrichMarket(m)));
   }
 }
 

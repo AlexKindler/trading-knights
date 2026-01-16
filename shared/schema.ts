@@ -8,6 +8,7 @@ export type UserRole = "STUDENT" | "ADMIN";
 export type UserStatus = "PENDING_VERIFICATION" | "VERIFIED" | "SUSPENDED";
 export type MarketType = "PREDICTION" | "STOCK";
 export type MarketStatus = "OPEN" | "CLOSED" | "RESOLVED" | "HIDDEN";
+export type MarketSource = "INTERNAL" | "POLYMARKET";
 export type TradeSide = "BUY" | "SELL";
 export type BalanceEventType = "STARTING_CREDIT" | "BANKRUPTCY_RESET" | "ADMIN_ADJUST" | "TRADE" | "MK_AI_PURCHASE";
 export type GameStatus = "UPCOMING" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED";
@@ -58,11 +59,22 @@ export const markets = pgTable("markets", {
   description: text("description").notNull(),
   category: text("category").notNull(),
   status: text("status").notNull().default("OPEN"),
+  source: text("source").notNull().default("INTERNAL"),
   closeAt: timestamp("close_at"),
   resolveAt: timestamp("resolve_at"),
   resolutionRule: text("resolution_rule"),
   createdBy: varchar("created_by").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// Polymarket links for imported sports markets
+export const polymarketLinks = pgTable("polymarket_links", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  marketId: varchar("market_id").notNull().unique(),
+  polymarketEventId: text("polymarket_event_id").notNull(),
+  polymarketSlug: text("polymarket_slug").notNull(),
+  polymarketImage: text("polymarket_image"),
+  lastSynced: timestamp("last_synced").defaultNow(),
 });
 
 // Outcomes (for prediction markets - YES/NO or multiple choice)
@@ -278,6 +290,7 @@ export type PriceSnapshot = typeof priceSnapshots.$inferSelect;
 export type StockCandle = typeof stockCandles.$inferSelect;
 export type MarketCandle = typeof marketCandles.$inferSelect;
 export type Game = typeof games.$inferSelect;
+export type PolymarketLink = typeof polymarketLinks.$inferSelect;
 
 // Leaderboard types
 export interface LeaderboardEntry {
