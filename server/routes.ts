@@ -229,6 +229,17 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/markets/:id/outcomes/:outcomeId/candles", async (req, res) => {
+    try {
+      const limit = parseInt(req.query.limit as string) || 100;
+      const candles = await storage.getMarketCandles(req.params.id, req.params.outcomeId, limit);
+      res.json(candles);
+    } catch (error) {
+      console.error("Get market candles error:", error);
+      res.status(500).json({ message: "Failed to fetch candles" });
+    }
+  });
+
   // ==================== STOCKS ROUTES ====================
 
   app.get("/api/stocks", async (req, res) => {

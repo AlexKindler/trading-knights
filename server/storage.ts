@@ -15,6 +15,7 @@ import {
   type PortfolioSummary,
   type PositionWithDetails,
   type StockCandle,
+  type MarketCandle,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { createHash } from "crypto";
@@ -78,6 +79,9 @@ export interface IStorage {
   getStockCandles(marketId: string, limit?: number): Promise<StockCandle[]>;
   addStockCandle(candle: Omit<StockCandle, "id">): Promise<StockCandle>;
   updateLatestCandle(marketId: string, price: number, volume: number): Promise<void>;
+
+  // Market Candles (for prediction markets)
+  getMarketCandles(marketId: string, outcomeId: string, limit?: number): Promise<MarketCandle[]>;
 }
 
 export class MemStorage implements IStorage {
@@ -92,6 +96,7 @@ export class MemStorage implements IStorage {
   private reports: Map<string, Report> = new Map();
   private balanceEvents: Map<string, BalanceEvent> = new Map();
   private stockCandles: Map<string, StockCandle[]> = new Map();
+  private marketCandles: Map<string, MarketCandle[]> = new Map();
 
   constructor() {
     this.seedData();
@@ -232,6 +237,54 @@ export class MemStorage implements IStorage {
         label: "NO",
         currentPrice: 1 - yesPrice,
       });
+
+      // Generate historical candle data for YES outcome
+      const yesCandles: MarketCandle[] = [];
+      const noCandles: MarketCandle[] = [];
+      let currentYesPrice = yesPrice;
+      const now = new Date();
+      
+      for (let i = 29; i >= 0; i--) {
+        const candleDate = new Date(now);
+        candleDate.setDate(candleDate.getDate() - i);
+        candleDate.setHours(9, 30, 0, 0);
+        
+        const changePercent = (Math.random() - 0.5) * 0.08;
+        const open = currentYesPrice;
+        const close = Math.max(0.05, Math.min(0.95, currentYesPrice * (1 + changePercent)));
+        const high = Math.min(0.98, Math.max(open, close) * (1 + Math.random() * 0.02));
+        const low = Math.max(0.02, Math.min(open, close) * (1 - Math.random() * 0.02));
+        const volume = Math.floor(50 + Math.random() * 500);
+        
+        yesCandles.push({
+          id: randomUUID(),
+          marketId,
+          outcomeId: yesId,
+          open,
+          high,
+          low,
+          close,
+          volume,
+          timestamp: candleDate,
+        });
+        
+        noCandles.push({
+          id: randomUUID(),
+          marketId,
+          outcomeId: noId,
+          open: 1 - open,
+          high: 1 - low,
+          low: 1 - high,
+          close: 1 - close,
+          volume,
+          timestamp: candleDate,
+        });
+        
+        currentYesPrice = close;
+      }
+      
+      this.marketCandles.set(`${marketId}:${yesId}`, yesCandles);
+      this.marketCandles.set(`${marketId}:${noId}`, noCandles);
     });
 
     // Create stock markets
@@ -730,6 +783,14 @@ export class MemStorage implements IStorage {
         timestamp: now,
       });
     }
+  }
+
+  async getMarketCandles(marketId: string, outcomeId: string, limit: number = 100): Promise<MarketCandle[]> {
+    const key = `${marketId}:${outcomeId}`;
+    const candles = this.marketCandles.get(key) || [];
+    return candles.slice(-limit).sort((a, b) => 
+      new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
   }
 }
 

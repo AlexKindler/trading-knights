@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TradingWidget } from "@/components/TradingWidget";
+import { MarketCandlestickChart } from "@/components/MarketCandlestickChart";
 import { useAuth } from "@/context/AuthContext";
 import {
   Clock,
@@ -17,7 +18,6 @@ import {
   MessageSquare,
 } from "lucide-react";
 import type { MarketWithDetails, Comment } from "@shared/schema";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 
 export default function MarketDetail() {
   const [, params] = useRoute("/markets/:id");
@@ -55,12 +55,6 @@ export default function MarketDetail() {
     };
     return colors[category?.toLowerCase()] || "bg-muted text-muted-foreground";
   };
-
-  const mockChartData = Array.from({ length: 30 }, (_, i) => ({
-    day: i + 1,
-    yes: 0.4 + Math.random() * 0.3,
-    no: 0.3 + Math.random() * 0.3,
-  }));
 
   if (isLoading) {
     return (
@@ -138,45 +132,20 @@ export default function MarketDetail() {
 
         <div className="mt-8 grid gap-6 lg:grid-cols-3">
           <div className="space-y-6 lg:col-span-2">
-            <Card>
-              <CardHeader>
-                <CardTitle>Price History</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="h-64">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={mockChartData}>
-                      <XAxis dataKey="day" tick={{ fontSize: 12 }} />
-                      <YAxis
-                        domain={[0, 1]}
-                        tickFormatter={(v) => `${(v * 100).toFixed(0)}¢`}
-                        tick={{ fontSize: 12 }}
-                      />
-                      <Tooltip
-                        formatter={(value: number) => [`${(value * 100).toFixed(0)}¢`]}
-                        labelFormatter={(label) => `Day ${label}`}
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="yes"
-                        stroke="#22c55e"
-                        strokeWidth={2}
-                        dot={false}
-                        name="YES"
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="no"
-                        stroke="#ef4444"
-                        strokeWidth={2}
-                        dot={false}
-                        name="NO"
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              </CardContent>
-            </Card>
+            {market.outcomes && market.outcomes.length > 0 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>YES Price History</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <MarketCandlestickChart
+                    marketId={market.id}
+                    outcomeId={market.outcomes[0].id}
+                    outcomeLabel="YES"
+                  />
+                </CardContent>
+              </Card>
+            )}
 
             <Card>
               <CardHeader>

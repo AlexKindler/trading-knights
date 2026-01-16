@@ -117,6 +117,19 @@ export const stockCandles = pgTable("stock_candles", {
   timestamp: timestamp("timestamp").notNull(),
 });
 
+// OHLC Candles for prediction market outcomes
+export const marketCandles = pgTable("market_candles", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  marketId: varchar("market_id").notNull(),
+  outcomeId: varchar("outcome_id").notNull(),
+  open: real("open").notNull(),
+  high: real("high").notNull(),
+  low: real("low").notNull(),
+  close: real("close").notNull(),
+  volume: integer("volume").notNull().default(0),
+  timestamp: timestamp("timestamp").notNull(),
+});
+
 // Comments
 export const comments = pgTable("comments", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -229,6 +242,7 @@ export type Resolution = typeof resolutions.$inferSelect;
 export type BalanceEvent = typeof balanceEvents.$inferSelect;
 export type PriceSnapshot = typeof priceSnapshots.$inferSelect;
 export type StockCandle = typeof stockCandles.$inferSelect;
+export type MarketCandle = typeof marketCandles.$inferSelect;
 
 // Leaderboard types
 export interface LeaderboardEntry {
