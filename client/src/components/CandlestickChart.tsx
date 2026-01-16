@@ -2,7 +2,6 @@ import { useQuery } from "@tanstack/react-query";
 import {
   ComposedChart,
   Bar,
-  Line,
   XAxis,
   YAxis,
   Tooltip,
@@ -28,7 +27,6 @@ interface CandleData {
   bodyHeight: number;
   wickTop: number;
   wickBottom: number;
-  ma7?: number;
 }
 
 export function CandlestickChart({ marketId }: CandlestickChartProps) {
@@ -49,16 +47,10 @@ export function CandlestickChart({ marketId }: CandlestickChartProps) {
     );
   }
 
-  const chartData: CandleData[] = candles.map((candle, index) => {
+  const chartData: CandleData[] = candles.map((candle) => {
     const isUp = candle.close >= candle.open;
     const bodyTop = Math.max(candle.open, candle.close);
     const bodyBottom = Math.min(candle.open, candle.close);
-    
-    let ma7: number | undefined;
-    if (index >= 6) {
-      const sum = candles.slice(index - 6, index + 1).reduce((acc, c) => acc + c.close, 0);
-      ma7 = sum / 7;
-    }
     
     return {
       date: new Date(candle.timestamp).toLocaleDateString("en-US", {
@@ -76,7 +68,6 @@ export function CandlestickChart({ marketId }: CandlestickChartProps) {
       bodyHeight: Math.max(bodyTop - bodyBottom, 0.01),
       wickTop: candle.high,
       wickBottom: candle.low,
-      ma7,
     };
   });
 
@@ -89,15 +80,15 @@ export function CandlestickChart({ marketId }: CandlestickChartProps) {
 
     const isUp = payload.isUp;
     const fillColor = isUp ? "#22c55e" : "#ef4444";
-    const strokeColor = isUp ? "#16a34a" : "#dc2626";
+    const wickColor = isUp ? "#22c55e" : "#ef4444";
     
-    const candleWidth = Math.max(width * 0.8, 4);
-    const wickWidth = 1.5;
+    const candleWidth = Math.max(width * 0.7, 6);
+    const wickWidth = 1;
     const xCenter = x + width / 2;
     
     const yScale = height / (maxPrice - minPrice);
     const candleBodyTop = y + (maxPrice - payload.bodyTop) * yScale;
-    const candleBodyHeight = payload.bodyHeight * yScale;
+    const candleBodyHeight = Math.max(payload.bodyHeight * yScale, 1);
     const wickTopY = y + (maxPrice - payload.high) * yScale;
     const wickBottomY = y + (maxPrice - payload.low) * yScale;
 
@@ -108,18 +99,15 @@ export function CandlestickChart({ marketId }: CandlestickChartProps) {
           y1={wickTopY}
           x2={xCenter}
           y2={wickBottomY}
-          stroke={strokeColor}
+          stroke={wickColor}
           strokeWidth={wickWidth}
         />
         <rect
           x={xCenter - candleWidth / 2}
           y={candleBodyTop}
           width={candleWidth}
-          height={Math.max(candleBodyHeight, 2)}
+          height={candleBodyHeight}
           fill={fillColor}
-          stroke={strokeColor}
-          strokeWidth={0.5}
-          rx={1}
         />
       </g>
     );
@@ -176,15 +164,6 @@ export function CandlestickChart({ marketId }: CandlestickChartProps) {
             dataKey="bodyHeight"
             shape={<CustomCandlestick />}
             isAnimationActive={false}
-          />
-          <Line
-            type="monotone"
-            dataKey="ma7"
-            stroke="#f59e0b"
-            strokeWidth={2}
-            dot={false}
-            connectNulls
-            name="7-Day MA"
           />
         </ComposedChart>
       </ResponsiveContainer>
