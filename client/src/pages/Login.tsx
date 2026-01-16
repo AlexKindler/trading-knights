@@ -47,7 +47,7 @@ export default function Login() {
           </div>
           <CardTitle className="text-2xl">Welcome back</CardTitle>
           <CardDescription>
-            Log in to your Menlo Market account
+            Log in to your MK Markets account
           </CardDescription>
         </CardHeader>
         <CardContent>

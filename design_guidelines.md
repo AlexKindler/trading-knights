@@ -1,4 +1,4 @@
-# Menlo Market Design Guidelines
+# MK Markets Design Guidelines
 
 ## Design Approach
 **Reference-Based Approach** drawing from modern fintech and prediction market platforms:
@@ -42,7 +42,7 @@ Core principle: Make complex financial data digestible and engaging for students
 
 ### Navigation
 Top navbar with logo left, nav items center, user menu right. Include:
-- Menlo Market logo
+- MK Markets logo
 - Markets, Stocks, Portfolio, Leaderboard tabs
 - Search bar (expandable on mobile)
 - Balance display (prominent, monospace font)

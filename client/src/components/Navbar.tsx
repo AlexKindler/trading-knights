@@ -62,7 +62,7 @@ export function Navbar() {
             <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary">
               <TrendingUp className="h-5 w-5 text-primary-foreground" />
             </div>
-            <span className="hidden font-semibold sm:inline-block" data-testid="text-logo">Menlo Market</span>
+            <span className="hidden font-semibold sm:inline-block" data-testid="text-logo">MK Markets</span>
           </Link>
 
           <nav className="hidden items-center gap-1 md:flex">
