@@ -1,5 +1,5 @@
-// Resend email integration for Trading Knights
-import { Resend } from 'resend';
+// SendGrid email integration for Trading Knights
+import sgMail from '@sendgrid/mail';
 
 let connectionSettings: any;
 
@@ -16,7 +16,7 @@ async function getCredentials() {
   }
 
   connectionSettings = await fetch(
-    'https://' + hostname + '/api/v2/connection?include_secrets=true&connector_names=resend',
+    'https://' + hostname + '/api/v2/connection?include_secrets=true&connector_names=sendgrid',
     {
       headers: {
         'Accept': 'application/json',
@@ -25,35 +25,35 @@ async function getCredentials() {
     }
   ).then(res => res.json()).then(data => data.items?.[0]);
 
-  if (!connectionSettings || (!connectionSettings.settings.api_key)) {
-    throw new Error('Resend not connected');
+  if (!connectionSettings || (!connectionSettings.settings.api_key || !connectionSettings.settings.from_email)) {
+    throw new Error('SendGrid not connected');
   }
   return { apiKey: connectionSettings.settings.api_key, fromEmail: connectionSettings.settings.from_email };
 }
 
 // WARNING: Never cache this client.
 // Access tokens expire, so a new client must be created each time.
-export async function getUncachableResendClient() {
-  const credentials = await getCredentials();
+export async function getUncachableSendGridClient() {
+  const { apiKey, fromEmail } = await getCredentials();
+  sgMail.setApiKey(apiKey);
   return {
-    client: new Resend(credentials.apiKey),
-    fromEmail: connectionSettings.settings.from_email
+    client: sgMail,
+    fromEmail
   };
 }
 
 export async function sendVerificationEmail(toEmail: string, verificationToken: string): Promise<boolean> {
   try {
-    const { client, fromEmail } = await getUncachableResendClient();
+    const { client, fromEmail } = await getUncachableSendGridClient();
     
-    // Get the base URL from environment or use a default
     const baseUrl = process.env.REPLIT_DEV_DOMAIN 
       ? `https://${process.env.REPLIT_DEV_DOMAIN}`
       : 'http://localhost:5000';
     
     const verificationLink = `${baseUrl}/verify-email?token=${verificationToken}`;
     
-    const { data, error } = await client.emails.send({
-      from: fromEmail || 'Trading Knights <onboarding@resend.dev>',
+    await client.send({
+      from: fromEmail,
       to: toEmail,
       subject: 'Verify your Trading Knights account',
       html: `
@@ -93,12 +93,7 @@ export async function sendVerificationEmail(toEmail: string, verificationToken: 
       `,
     });
 
-    if (error) {
-      console.error('Failed to send verification email:', error);
-      return false;
-    }
-    
-    console.log('Verification email sent successfully:', data?.id);
+    console.log('Verification email sent successfully to:', toEmail);
     return true;
   } catch (error) {
     console.error('Error sending verification email:', error);
@@ -108,7 +103,7 @@ export async function sendVerificationEmail(toEmail: string, verificationToken: 
 
 export async function sendPasswordResetEmail(toEmail: string, resetToken: string): Promise<boolean> {
   try {
-    const { client, fromEmail } = await getUncachableResendClient();
+    const { client, fromEmail } = await getUncachableSendGridClient();
     
     const baseUrl = process.env.REPLIT_DEV_DOMAIN 
       ? `https://${process.env.REPLIT_DEV_DOMAIN}`
@@ -116,8 +111,8 @@ export async function sendPasswordResetEmail(toEmail: string, resetToken: string
     
     const resetLink = `${baseUrl}/reset-password?token=${resetToken}`;
     
-    const { data, error } = await client.emails.send({
-      from: fromEmail || 'Trading Knights <onboarding@resend.dev>',
+    await client.send({
+      from: fromEmail,
       to: toEmail,
       subject: 'Reset your Trading Knights password',
       html: `
@@ -136,11 +131,7 @@ export async function sendPasswordResetEmail(toEmail: string, resetToken: string
       `,
     });
 
-    if (error) {
-      console.error('Failed to send password reset email:', error);
-      return false;
-    }
-    
+    console.log('Password reset email sent successfully to:', toEmail);
     return true;
   } catch (error) {
     console.error('Error sending password reset email:', error);
