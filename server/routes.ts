@@ -5,6 +5,7 @@ import MemoryStore from "memorystore";
 import { storage } from "./storage";
 import { insertUserSchema, loginSchema, insertTradeSchema, insertCommentSchema, insertReportSchema } from "@shared/schema";
 import { createHash } from "crypto";
+import { sendVerificationEmail } from "./email";
 
 // Extend express-session types
 declare module "express-session" {
@@ -89,11 +90,16 @@ export async function registerRoutes(
       const user = await storage.createUser(parsed.data);
       const token = await storage.createVerificationToken(user.id);
 
-      // In dev mode, log the verification link
-      console.log("\n========================================");
-      console.log("📧 VERIFICATION LINK (Dev Mode):");
-      console.log(`   http://localhost:5000/verify-email?token=${token}`);
-      console.log("========================================\n");
+      // Send verification email
+      const emailSent = await sendVerificationEmail(user.email, token);
+      
+      if (!emailSent) {
+        // Fallback: log the verification link for debugging
+        console.log("\n========================================");
+        console.log("📧 VERIFICATION LINK (Email failed to send):");
+        console.log(`   ${process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : 'http://localhost:5000'}/verify-email?token=${token}`);
+        console.log("========================================\n");
+      }
 
       req.session.userId = user.id;
       res.json({ user: { ...user, password: undefined } });
@@ -182,10 +188,15 @@ export async function registerRoutes(
 
       const token = await storage.createVerificationToken(user.id);
 
-      console.log("\n========================================");
-      console.log("📧 VERIFICATION LINK (Resend - Dev Mode):");
-      console.log(`   http://localhost:5000/verify-email?token=${token}`);
-      console.log("========================================\n");
+      // Send verification email
+      const emailSent = await sendVerificationEmail(user.email, token);
+      
+      if (!emailSent) {
+        console.log("\n========================================");
+        console.log("📧 VERIFICATION LINK (Email failed to send):");
+        console.log(`   ${process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : 'http://localhost:5000'}/verify-email?token=${token}`);
+        console.log("========================================\n");
+      }
 
       res.json({ success: true });
     } catch (error) {
