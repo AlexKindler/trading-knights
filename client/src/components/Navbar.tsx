@@ -14,8 +14,8 @@ import { TrendingUp, BarChart3, Wallet, Trophy, Menu, LogOut, User, Shield, Sear
 import { useState, useEffect } from "react";
 
 const navItems = [
-  { href: "/markets", label: "Markets", icon: TrendingUp },
-  { href: "/stocks", label: "Stocks", icon: BarChart3 },
+  { href: "/markets", label: "Trading", icon: TrendingUp },
+  { href: "/stocks", label: "Investments", icon: BarChart3 },
   { href: "/mk-parlay", label: "MK Parlay", icon: Trophy },
   { href: "/portfolio", label: "Wallet", icon: Wallet },
   { href: "/leaderboard", label: "Leaderboard", icon: TrendingUp },

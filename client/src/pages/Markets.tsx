@@ -56,12 +56,12 @@ export default function Markets() {
       <div className="px-4 py-8 mx-auto max-w-7xl">
         <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h1 className="flex items-center gap-2 text-3xl font-bold">
+            <h1 className="flex items-center gap-2 text-3xl font-bold" data-testid="text-page-title">
               <TrendingUp className="h-8 w-8 text-primary" />
-              Prediction Markets
+              Trading
             </h1>
-            <p className="mt-1 text-muted-foreground">
-              Bet on outcomes of school events with play money
+            <p className="mt-1 text-muted-foreground" data-testid="text-page-subtitle">
+              Trade prediction markets on school events, elections, and outcomes
             </p>
           </div>
           {user?.status === "VERIFIED" && (

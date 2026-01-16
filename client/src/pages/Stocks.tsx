@@ -73,12 +73,12 @@ export default function Stocks() {
       <div className="px-4 py-8 mx-auto max-w-7xl">
         <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h1 className="flex items-center gap-2 text-3xl font-bold">
+            <h1 className="flex items-center gap-2 text-3xl font-bold" data-testid="text-page-title">
               <BarChart3 className="h-8 w-8 text-primary" />
-              Stock Market
+              Long-Term Investments
             </h1>
-            <p className="mt-1 text-muted-foreground">
-              Trade student-created stocks for clubs, teams, and more
+            <p className="mt-1 text-muted-foreground" data-testid="text-page-subtitle">
+              Invest in student-created stocks representing clubs, teams, and school entities
             </p>
           </div>
           {user?.status === "VERIFIED" && (
