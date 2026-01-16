@@ -8,22 +8,34 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { StockTicker } from "@/components/StockTicker";
 import { useAuth } from "@/context/AuthContext";
-import { Search, TrendingUp, TrendingDown, Zap, ArrowUpDown, DollarSign } from "lucide-react";
+import { Search, TrendingUp, TrendingDown, Zap, ArrowUpDown, DollarSign, Activity, Clock, BarChart2 } from "lucide-react";
 import type { MarketWithDetails } from "@shared/schema";
 
 const categories = ["All", "Clubs", "Sports", "Events", "Food", "Activities"];
 
-type SortOption = "name" | "price" | "change" | "volume";
+type SortOption = "volatility" | "price" | "momentum";
 
 export default function Markets() {
   const { user } = useAuth();
   const [search, setSearch] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
-  const [sortBy, setSortBy] = useState<SortOption>("change");
+  const [sortBy, setSortBy] = useState<SortOption>("volatility");
 
   const { data: stocks, isLoading } = useQuery<MarketWithDetails[]>({
     queryKey: ["/api/stocks"],
   });
+
+  const getVolatility = (market: MarketWithDetails) => {
+    const meta = market.stockMeta;
+    if (!meta) return 0;
+    return Math.abs((meta.currentPrice - meta.initialPrice) / meta.initialPrice);
+  };
+
+  const getMomentum = (market: MarketWithDetails) => {
+    const meta = market.stockMeta;
+    if (!meta) return 0;
+    return (meta.currentPrice - meta.initialPrice) / meta.initialPrice;
+  };
 
   const filteredStocks = stocks
     ?.filter((market) => {
@@ -39,79 +51,147 @@ export default function Markets() {
       switch (sortBy) {
         case "price":
           return (b.stockMeta?.currentPrice ?? 0) - (a.stockMeta?.currentPrice ?? 0);
-        case "change":
-          const aChange = ((a.stockMeta?.currentPrice ?? 0) - (a.stockMeta?.initialPrice ?? 0)) / (a.stockMeta?.initialPrice ?? 1);
-          const bChange = ((b.stockMeta?.currentPrice ?? 0) - (b.stockMeta?.initialPrice ?? 0)) / (b.stockMeta?.initialPrice ?? 1);
-          return Math.abs(bChange) - Math.abs(aChange);
-        case "name":
+        case "momentum":
+          return getMomentum(b) - getMomentum(a);
+        case "volatility":
         default:
-          return (a.stockMeta?.ticker ?? "").localeCompare(b.stockMeta?.ticker ?? "");
+          return getVolatility(b) - getVolatility(a);
       }
     });
 
-  const hotStocks = stocks
-    ?.filter((m) => m.stockMeta)
-    .sort((a, b) => {
-      const aChange = Math.abs(((a.stockMeta?.currentPrice ?? 0) - (a.stockMeta?.initialPrice ?? 0)) / (a.stockMeta?.initialPrice ?? 1));
-      const bChange = Math.abs(((b.stockMeta?.currentPrice ?? 0) - (b.stockMeta?.initialPrice ?? 0)) / (b.stockMeta?.initialPrice ?? 1));
-      return bChange - aChange;
-    })
-    .slice(0, 5);
+  const highVolatility = stocks
+    ?.filter((m) => m.stockMeta && getVolatility(m) > 0.05)
+    .sort((a, b) => getVolatility(b) - getVolatility(a))
+    .slice(0, 4);
+
+  const bullishMomentum = stocks
+    ?.filter((m) => m.stockMeta && getMomentum(m) > 0)
+    .sort((a, b) => getMomentum(b) - getMomentum(a))
+    .slice(0, 3);
+
+  const bearishMomentum = stocks
+    ?.filter((m) => m.stockMeta && getMomentum(m) < 0)
+    .sort((a, b) => getMomentum(a) - getMomentum(b))
+    .slice(0, 3);
 
   return (
     <div className="min-h-screen">
       <StockTicker />
       <div className="px-4 py-8 mx-auto max-w-7xl">
-        <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="flex items-center gap-2 text-3xl font-bold" data-testid="text-page-title">
-              <Zap className="h-8 w-8 text-primary" />
+              <Zap className="h-8 w-8 text-yellow-500" />
               Trading
             </h1>
             <p className="mt-1 text-muted-foreground" data-testid="text-page-subtitle">
-              Quick buy and sell stocks for short-term gains
+              Short-term profits from price swings. Buy low, sell high, move fast.
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            <Badge variant="outline" className="gap-1">
+          <div className="flex items-center gap-3">
+            <Badge variant="secondary" className="gap-1 px-3 py-1">
+              <Clock className="h-3 w-3" />
+              Short-Term
+            </Badge>
+            <Badge variant="outline" className="gap-1 px-3 py-1">
               <DollarSign className="h-3 w-3" />
-              {user?.balance?.toLocaleString() ?? 0} Balance
+              ${user?.balance?.toLocaleString() ?? 0}
             </Badge>
           </div>
         </div>
 
+        <Card className="mb-6 bg-gradient-to-r from-yellow-500/10 to-orange-500/10 border-yellow-500/20">
+          <CardContent className="py-4">
+            <div className="flex items-center gap-3">
+              <Activity className="h-5 w-5 text-yellow-500" />
+              <div>
+                <p className="font-medium">Trading Strategy</p>
+                <p className="text-sm text-muted-foreground">
+                  Focus on volatility and momentum. Watch for price swings and time your entries/exits.
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
         {stocks && stocks.length > 0 && (
-          <Card className="mb-8">
-            <CardHeader className="pb-3">
-              <CardTitle className="flex items-center gap-2 text-lg">
-                <Zap className="h-5 w-5 text-yellow-500" />
-                Hot Stocks - Most Active
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-5">
-                {hotStocks?.map((market) => {
-                  const change = ((market.stockMeta?.currentPrice ?? 0) - (market.stockMeta?.initialPrice ?? 0)) / (market.stockMeta?.initialPrice ?? 1) * 100;
+          <div className="mb-8 grid gap-4 lg:grid-cols-3">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <BarChart2 className="h-4 w-4 text-purple-500" />
+                  High Volatility
+                </CardTitle>
+                <p className="text-xs text-muted-foreground">Big price swings = trading opportunities</p>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {highVolatility?.map((market) => {
+                  const volatility = getVolatility(market) * 100;
+                  const change = getMomentum(market) * 100;
                   const isPositive = change >= 0;
                   return (
                     <Link key={market.id} href={`/stocks/${market.id}`}>
-                      <Card className="hover-elevate cursor-pointer p-3">
-                        <div className="flex items-center justify-between">
-                          <span className="font-mono font-bold text-lg">{market.stockMeta?.ticker}</span>
-                          <span className={`flex items-center gap-1 text-sm font-medium ${isPositive ? "text-green-500" : "text-red-500"}`}>
-                            {isPositive ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
-                            {isPositive ? "+" : ""}{change.toFixed(1)}%
-                          </span>
+                      <div className="flex items-center justify-between rounded-md p-2 hover-elevate cursor-pointer">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-bold">{market.stockMeta?.ticker}</span>
+                          <Badge variant="outline" className="text-xs">{volatility.toFixed(1)}% vol</Badge>
                         </div>
-                        <p className="text-xs text-muted-foreground truncate mt-1">{market.title}</p>
-                        <p className="font-mono text-lg mt-2">${market.stockMeta?.currentPrice.toFixed(2)}</p>
-                      </Card>
+                        <span className={`font-mono text-sm ${isPositive ? "text-green-500" : "text-red-500"}`}>
+                          {isPositive ? "+" : ""}{change.toFixed(1)}%
+                        </span>
+                      </div>
                     </Link>
                   );
                 })}
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center gap-2 text-base text-green-600 dark:text-green-400">
+                  <TrendingUp className="h-4 w-4" />
+                  Bullish Momentum
+                </CardTitle>
+                <p className="text-xs text-muted-foreground">Stocks trending upward</p>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {bullishMomentum?.map((market) => {
+                  const change = getMomentum(market) * 100;
+                  return (
+                    <Link key={market.id} href={`/stocks/${market.id}`}>
+                      <div className="flex items-center justify-between rounded-md p-2 hover-elevate cursor-pointer">
+                        <span className="font-mono font-bold">{market.stockMeta?.ticker}</span>
+                        <span className="font-mono text-sm text-green-500">+{change.toFixed(1)}%</span>
+                      </div>
+                    </Link>
+                  );
+                })}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center gap-2 text-base text-red-600 dark:text-red-400">
+                  <TrendingDown className="h-4 w-4" />
+                  Bearish Momentum
+                </CardTitle>
+                <p className="text-xs text-muted-foreground">Potential short or buy-the-dip</p>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {bearishMomentum?.map((market) => {
+                  const change = getMomentum(market) * 100;
+                  return (
+                    <Link key={market.id} href={`/stocks/${market.id}`}>
+                      <div className="flex items-center justify-between rounded-md p-2 hover-elevate cursor-pointer">
+                        <span className="font-mono font-bold">{market.stockMeta?.ticker}</span>
+                        <span className="font-mono text-sm text-red-500">{change.toFixed(1)}%</span>
+                      </div>
+                    </Link>
+                  );
+                })}
+              </CardContent>
+            </Card>
+          </div>
         )}
 
         <div className="mb-6 flex flex-col gap-4 lg:flex-row">
@@ -142,14 +222,24 @@ export default function Markets() {
 
         <div className="mb-6 flex gap-2">
           <Button
-            variant={sortBy === "change" ? "secondary" : "ghost"}
+            variant={sortBy === "volatility" ? "secondary" : "ghost"}
             size="sm"
             className="gap-2"
-            onClick={() => setSortBy("change")}
-            data-testid="button-trading-sort-change"
+            onClick={() => setSortBy("volatility")}
+            data-testid="button-trading-sort-volatility"
           >
             <ArrowUpDown className="h-4 w-4" />
-            Most Active
+            Volatility
+          </Button>
+          <Button
+            variant={sortBy === "momentum" ? "secondary" : "ghost"}
+            size="sm"
+            className="gap-2"
+            onClick={() => setSortBy("momentum")}
+            data-testid="button-trading-sort-momentum"
+          >
+            <TrendingUp className="h-4 w-4" />
+            Momentum
           </Button>
           <Button
             variant={sortBy === "price" ? "secondary" : "ghost"}
@@ -158,14 +248,6 @@ export default function Markets() {
             data-testid="button-trading-sort-price"
           >
             Price
-          </Button>
-          <Button
-            variant={sortBy === "name" ? "secondary" : "ghost"}
-            size="sm"
-            onClick={() => setSortBy("name")}
-            data-testid="button-trading-sort-name"
-          >
-            A-Z
           </Button>
         </div>
 
@@ -184,7 +266,8 @@ export default function Markets() {
             {filteredStocks.map((market) => {
               const meta = market.stockMeta;
               if (!meta) return null;
-              const change = (meta.currentPrice - meta.initialPrice) / meta.initialPrice * 100;
+              const change = getMomentum(market) * 100;
+              const volatility = getVolatility(market) * 100;
               const isPositive = change >= 0;
               
               return (
@@ -199,10 +282,15 @@ export default function Markets() {
                         {isPositive ? "+" : ""}{change.toFixed(1)}%
                       </Badge>
                     </div>
-                    <div className="mt-4 flex items-end justify-between">
+                    <div className="mt-3 flex items-center gap-2">
+                      <Badge variant="outline" className="text-xs gap-1">
+                        <BarChart2 className="h-3 w-3" />
+                        {volatility.toFixed(1)}% vol
+                      </Badge>
+                    </div>
+                    <div className="mt-3 flex items-end justify-between">
                       <div>
                         <p className="text-2xl font-mono font-semibold">${meta.currentPrice.toFixed(2)}</p>
-                        <p className="text-xs text-muted-foreground">from ${meta.initialPrice.toFixed(2)}</p>
                       </div>
                       <div className="flex gap-2">
                         <Button size="sm" variant="outline" className="text-green-600 border-green-600 hover:bg-green-50 dark:hover:bg-green-950">
