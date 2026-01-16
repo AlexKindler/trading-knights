@@ -745,6 +745,35 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/admin/games/import-csv - Bulk import games from CSV data
+  app.post("/api/admin/games/import-csv", requireAdmin, async (req, res) => {
+    try {
+      const { games } = req.body;
+      if (!Array.isArray(games)) {
+        return res.status(400).json({ message: "Invalid games data" });
+      }
+
+      const results = [];
+      for (const gameData of games) {
+        try {
+          const game = await storage.createGame({
+            ...gameData,
+            createdBy: req.session.userId!,
+            gameDate: new Date(gameData.gameDate),
+          });
+          results.push({ success: true, game });
+        } catch (error) {
+          results.push({ success: false, error: String(error), data: gameData });
+        }
+      }
+
+      res.json({ imported: results.filter(r => r.success).length, total: games.length, results });
+    } catch (error) {
+      console.error("Import CSV games error:", error);
+      res.status(500).json({ message: "Failed to import games" });
+    }
+  });
+
   app.post("/api/admin/games/:id/score", requireAdmin, async (req, res) => {
     try {
       const { menloScore, opponentScore } = req.body;

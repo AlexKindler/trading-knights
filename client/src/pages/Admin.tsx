@@ -42,7 +42,9 @@ import {
   Trophy,
   Download,
   ExternalLink,
+  Upload,
 } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
 import type { User, Market, Report, Game, MarketWithDetails, PolymarketLink } from "@shared/schema";
 
 const SPORTS = [
@@ -57,10 +59,23 @@ const SPORTS = [
   "OTHER",
 ] as const;
 
+const COMMON_OPPONENTS = [
+  "Sacred Heart Prep",
+  "Pinewood",
+  "Woodside Priory",
+  "Eastside Prep",
+  "Harker",
+  "Crystal Springs Uplands",
+  "Castilleja",
+  "Notre Dame (Belmont)",
+];
+
 export default function Admin() {
   const { user } = useAuth();
   const { toast } = useToast();
   const [isCreateGameOpen, setIsCreateGameOpen] = useState(false);
+  const [isCsvImportOpen, setIsCsvImportOpen] = useState(false);
+  const [csvText, setCsvText] = useState("");
   const [scoreDialogOpen, setScoreDialogOpen] = useState<string | null>(null);
   const [menloScore, setMenloScore] = useState("");
   const [opponentScore, setOpponentScore] = useState("");
@@ -241,6 +256,61 @@ export default function Admin() {
       toast({ title: "Error", description: error.message, variant: "destructive" });
     },
   });
+
+  const importCsvMutation = useMutation({
+    mutationFn: async (games: Array<{ sport: string; opponent: string; isHome: boolean; gameDate: string }>) => {
+      const res = await apiRequest("POST", "/api/admin/games/import-csv", { games });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.message || "Failed to import games");
+      }
+      return res.json();
+    },
+    onSuccess: (data: { imported: number; total: number }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/games"] });
+      toast({ title: `Imported ${data.imported} of ${data.total} games` });
+      setIsCsvImportOpen(false);
+      setCsvText("");
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const handleCsvImport = () => {
+    const lines = csvText.trim().split("\n").filter(line => line.trim());
+    if (lines.length === 0) {
+      toast({ title: "No data to import", variant: "destructive" });
+      return;
+    }
+
+    const games = [];
+    for (const line of lines) {
+      const parts = line.split(",").map(p => p.trim());
+      if (parts.length < 4) {
+        toast({ title: "Invalid CSV format", description: `Line "${line}" does not have 4 fields`, variant: "destructive" });
+        return;
+      }
+
+      const [sport, opponent, homeAway, gameDate] = parts;
+      const sportUpper = sport.toUpperCase();
+      if (!SPORTS.includes(sportUpper as typeof SPORTS[number])) {
+        toast({ title: "Invalid sport", description: `"${sport}" is not a valid sport`, variant: "destructive" });
+        return;
+      }
+
+      const isHome = homeAway.toLowerCase() === "home" || homeAway.toLowerCase() === "true";
+
+      games.push({
+        sport: sportUpper,
+        opponent,
+        isHome,
+        gameDate,
+      });
+    }
+
+    importCsvMutation.mutate(games);
+  };
 
   const getImportedEventIds = () => {
     if (!importedMarkets) return new Set<string>();
@@ -530,13 +600,57 @@ export default function Admin() {
             <Card>
               <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
                 <CardTitle>Games Management</CardTitle>
-                <Dialog open={isCreateGameOpen} onOpenChange={setIsCreateGameOpen}>
-                  <DialogTrigger asChild>
-                    <Button size="sm" data-testid="button-create-game">
-                      <Plus className="mr-1 h-4 w-4" />
-                      Add Game
-                    </Button>
-                  </DialogTrigger>
+                <div className="flex gap-2">
+                  <Dialog open={isCsvImportOpen} onOpenChange={setIsCsvImportOpen}>
+                    <DialogTrigger asChild>
+                      <Button size="sm" variant="outline" data-testid="button-import-csv">
+                        <Upload className="mr-1 h-4 w-4" />
+                        Import CSV
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent>
+                      <DialogHeader>
+                        <DialogTitle>Import Games from CSV</DialogTitle>
+                      </DialogHeader>
+                      <div className="space-y-4 pt-4">
+                        <div className="space-y-2">
+                          <Label>CSV Data</Label>
+                          <Textarea
+                            value={csvText}
+                            onChange={(e) => setCsvText(e.target.value)}
+                            placeholder="BASKETBALL,Sacred Heart Prep,home,2026-01-25T19:00"
+                            className="min-h-[150px] font-mono text-sm"
+                            data-testid="textarea-csv-import"
+                          />
+                          <p className="text-sm text-muted-foreground">
+                            Format: sport,opponent,home/away,date
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            Example: BASKETBALL,Sacred Heart Prep,home,2026-01-25T19:00
+                          </p>
+                        </div>
+                        <Button
+                          onClick={handleCsvImport}
+                          disabled={importCsvMutation.isPending}
+                          className="w-full"
+                          data-testid="button-submit-csv-import"
+                        >
+                          {importCsvMutation.isPending ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            "Import Games"
+                          )}
+                        </Button>
+                      </div>
+                    </DialogContent>
+                  </Dialog>
+                  <Dialog open={isCreateGameOpen} onOpenChange={setIsCreateGameOpen}>
+                    <DialogTrigger asChild>
+                      <Button size="sm" data-testid="button-create-game">
+                        <Plus className="mr-1 h-4 w-4" />
+                        Add Game
+                      </Button>
+                    </DialogTrigger>
                   <DialogContent>
                     <DialogHeader>
                       <DialogTitle>Create New Game</DialogTitle>
@@ -559,6 +673,23 @@ export default function Admin() {
                             ))}
                           </SelectContent>
                         </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Quick Select Opponent</Label>
+                        <div className="flex flex-wrap gap-2">
+                          {COMMON_OPPONENTS.map((opponent) => (
+                            <Button
+                              key={opponent}
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={() => setNewGame({ ...newGame, opponent })}
+                              data-testid={`preset-${opponent.replace(/\s+/g, '-').toLowerCase()}`}
+                            >
+                              {opponent}
+                            </Button>
+                          ))}
+                        </div>
                       </div>
                       <div className="space-y-2">
                         <Label htmlFor="opponent">Opponent</Label>
@@ -603,7 +734,8 @@ export default function Admin() {
                       </Button>
                     </div>
                   </DialogContent>
-                </Dialog>
+                  </Dialog>
+                </div>
               </CardHeader>
               <CardContent>
                 {gamesLoading ? (

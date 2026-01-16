@@ -150,7 +150,7 @@ export default function MkParlay() {
                     </div>
 
                     <div className="flex flex-wrap gap-2">
-                      <Link href={`/market/${market.id}`}>
+                      <Link href={`/markets/${market.id}`}>
                         <Button size="sm" data-testid={`button-trade-${market.id}`}>
                           Trade Now
                           <ArrowRight className="ml-1 h-4 w-4" />
