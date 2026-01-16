@@ -16,8 +16,9 @@ import { useState, useEffect } from "react";
 const navItems = [
   { href: "/markets", label: "Markets", icon: TrendingUp },
   { href: "/stocks", label: "Stocks", icon: BarChart3 },
+  { href: "/mk-parlay", label: "MK Parlay", icon: Trophy },
   { href: "/portfolio", label: "Wallet", icon: Wallet },
-  { href: "/leaderboard", label: "Leaderboard", icon: Trophy },
+  { href: "/leaderboard", label: "Leaderboard", icon: TrendingUp },
   { href: "/mk-ai", label: "MK AI", icon: Brain },
 ];
 

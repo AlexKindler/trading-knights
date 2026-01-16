@@ -14,6 +14,7 @@ import StockDetail from "@/pages/StockDetail";
 import Portfolio from "@/pages/Portfolio";
 import LeaderboardPage from "@/pages/LeaderboardPage";
 import MkAi from "@/pages/MkAi";
+import MkParlay from "@/pages/MkParlay";
 import Login from "@/pages/Login";
 import Register from "@/pages/Register";
 import VerifyEmail from "@/pages/VerifyEmail";
@@ -31,6 +32,7 @@ function Router() {
       <Route path="/stocks/:id" component={StockDetail} />
       <Route path="/portfolio" component={Portfolio} />
       <Route path="/leaderboard" component={LeaderboardPage} />
+      <Route path="/mk-parlay" component={MkParlay} />
       <Route path="/mk-ai" component={MkAi} />
       <Route path="/login" component={Login} />
       <Route path="/register" component={Register} />

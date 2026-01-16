@@ -862,5 +862,26 @@ export async function registerRoutes(
     }
   });
 
+  // ==================== POLYMARKET ROUTES ====================
+
+  app.get("/api/polymarket/sports", async (req, res) => {
+    try {
+      const response = await fetch("https://gamma-api.polymarket.com/events?closed=false&limit=50");
+      const events = await response.json();
+      
+      const sportsKeywords = ["nba", "nfl", "mlb", "nhl", "soccer", "football", "basketball", "baseball", "hockey", "tennis", "golf", "ufc", "mma", "boxing", "olympics", "world cup", "super bowl", "championship", "playoffs", "finals"];
+      
+      const sportsEvents = events.filter((event: any) => {
+        const text = (event.title + " " + (event.description || "")).toLowerCase();
+        return sportsKeywords.some(keyword => text.includes(keyword));
+      });
+      
+      res.json(sportsEvents);
+    } catch (error) {
+      console.error("Polymarket fetch error:", error);
+      res.status(500).json({ message: "Failed to fetch sports markets" });
+    }
+  });
+
   return httpServer;
 }
