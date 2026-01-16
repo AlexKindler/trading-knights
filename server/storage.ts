@@ -314,14 +314,8 @@ export class MemStorage implements IStorage {
 
     // Create stock markets
     const stocks = [
-      { ticker: "CHESS", name: "Chess Club", category: "Clubs", price: 25, description: "Trade shares of the Menlo Chess Club. Performance based on tournament results and membership growth." },
-      { ticker: "BBALL", name: "Basketball Team", category: "Sports", price: 45, description: "Trade shares tracking the basketball team's performance throughout the season." },
-      { ticker: "DRAMA", name: "Drama Department", category: "Clubs", price: 32, description: "Trade shares based on drama production success and ticket sales." },
-      { ticker: "PIZZA", name: "Cafeteria Pizza", category: "Food", price: 18, description: "Sentiment trading on the quality and availability of cafeteria pizza." },
-      { ticker: "ROBOT", name: "Robotics Club", category: "Clubs", price: 55, description: "Trade based on robotics competition performance and innovation." },
-      { ticker: "TRACK", name: "Track Team", category: "Sports", price: 28, description: "Trade shares following track and field team achievements." },
-      { ticker: "PROM", name: "Prom Committee", category: "Events", price: 40, description: "Trade based on prom planning progress and anticipated attendance." },
-      { ticker: "DECA", name: "DECA Club", category: "Clubs", price: 35, description: "Trade on DECA competition success and chapter growth." },
+      { ticker: "BIZ", name: "Business Club", category: "Clubs", price: 40, description: "Trade shares of the Menlo Business Club. Performance based on competition results and entrepreneurship initiatives." },
+      { ticker: "FISH", name: "Fishing Club", category: "Clubs", price: 25, description: "Trade shares of the Menlo Fishing Club. Value based on catch rates and outdoor activity engagement." },
     ];
 
     stocks.forEach((s) => {
