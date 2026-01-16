@@ -16,6 +16,7 @@ import {
   type PositionWithDetails,
   type StockCandle,
   type MarketCandle,
+  type Game,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { createHash } from "crypto";
@@ -87,6 +88,13 @@ export interface IStorage {
 
   // Market Candles (for prediction markets)
   getMarketCandles(marketId: string, outcomeId: string, limit?: number): Promise<MarketCandle[]>;
+
+  // Games
+  createGame(game: Partial<Game>): Promise<Game>;
+  getGame(id: string): Promise<Game | undefined>;
+  getAllGames(): Promise<Game[]>;
+  updateGame(id: string, updates: Partial<Game>): Promise<Game | undefined>;
+  deleteGame(id: string): Promise<boolean>;
 }
 
 export class MemStorage implements IStorage {
@@ -103,6 +111,7 @@ export class MemStorage implements IStorage {
   private balanceEvents: Map<string, BalanceEvent> = new Map();
   private stockCandles: Map<string, StockCandle[]> = new Map();
   private marketCandles: Map<string, MarketCandle[]> = new Map();
+  private games: Map<string, Game> = new Map();
 
   constructor() {
     this.seedData();
@@ -832,6 +841,47 @@ export class MemStorage implements IStorage {
     return candles.slice(-limit).sort((a, b) => 
       new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
     );
+  }
+
+  async createGame(game: Partial<Game>): Promise<Game> {
+    const id = randomUUID();
+    const newGame: Game = {
+      id,
+      sport: game.sport || "OTHER",
+      opponent: game.opponent || "",
+      isHome: game.isHome ?? true,
+      gameDate: game.gameDate || new Date(),
+      status: game.status || "UPCOMING",
+      menloScore: game.menloScore ?? null,
+      opponentScore: game.opponentScore ?? null,
+      marketId: game.marketId ?? null,
+      createdBy: game.createdBy || "",
+      createdAt: new Date(),
+    };
+    this.games.set(id, newGame);
+    return newGame;
+  }
+
+  async getGame(id: string): Promise<Game | undefined> {
+    return this.games.get(id);
+  }
+
+  async getAllGames(): Promise<Game[]> {
+    return Array.from(this.games.values()).sort(
+      (a, b) => new Date(b.gameDate).getTime() - new Date(a.gameDate).getTime()
+    );
+  }
+
+  async updateGame(id: string, updates: Partial<Game>): Promise<Game | undefined> {
+    const game = this.games.get(id);
+    if (!game) return undefined;
+    const updated = { ...game, ...updates };
+    this.games.set(id, updated);
+    return updated;
+  }
+
+  async deleteGame(id: string): Promise<boolean> {
+    return this.games.delete(id);
   }
 }
 

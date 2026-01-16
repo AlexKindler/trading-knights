@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -5,6 +6,23 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { useAuth } from "@/context/AuthContext";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -15,16 +33,48 @@ import {
   CheckCircle,
   XCircle,
   AlertTriangle,
-  Eye,
   EyeOff,
   Ban,
   Loader2,
+  Calendar,
+  Plus,
+  Trash2,
+  Trophy,
 } from "lucide-react";
-import type { User, Market, Report } from "@shared/schema";
+import type { User, Market, Report, Game } from "@shared/schema";
+
+const SPORTS = [
+  "BASKETBALL",
+  "FOOTBALL",
+  "SOCCER",
+  "BASEBALL",
+  "VOLLEYBALL",
+  "TENNIS",
+  "SWIMMING",
+  "TRACK",
+  "OTHER",
+] as const;
 
 export default function Admin() {
   const { user } = useAuth();
   const { toast } = useToast();
+  const [isCreateGameOpen, setIsCreateGameOpen] = useState(false);
+  const [scoreDialogOpen, setScoreDialogOpen] = useState<string | null>(null);
+  const [menloScore, setMenloScore] = useState("");
+  const [opponentScore, setOpponentScore] = useState("");
+  const getDefaultGameDate = () => {
+    const nextWeek = new Date();
+    nextWeek.setDate(nextWeek.getDate() + 7);
+    nextWeek.setHours(19, 0, 0, 0);
+    return nextWeek.toISOString().slice(0, 16);
+  };
+
+  const [newGame, setNewGame] = useState({
+    sport: "BASKETBALL" as typeof SPORTS[number],
+    opponent: "",
+    isHome: true,
+    gameDate: getDefaultGameDate(),
+  });
 
   const { data: users, isLoading: usersLoading } = useQuery<User[]>({
     queryKey: ["/api/admin/users"],
@@ -38,6 +88,11 @@ export default function Admin() {
 
   const { data: pendingMarkets, isLoading: marketsLoading } = useQuery<Market[]>({
     queryKey: ["/api/admin/markets/pending"],
+    enabled: user?.role === "ADMIN",
+  });
+
+  const { data: games, isLoading: gamesLoading } = useQuery<Game[]>({
+    queryKey: ["/api/admin/games"],
     enabled: user?.role === "ADMIN",
   });
 
@@ -64,6 +119,107 @@ export default function Admin() {
       toast({ title: "Report resolved" });
     },
   });
+
+  const createGameMutation = useMutation({
+    mutationFn: async (gameData: typeof newGame) => {
+      const res = await apiRequest("POST", "/api/admin/games", gameData);
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.message || "Failed to create game");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/games"] });
+      toast({ title: "Game created" });
+      setIsCreateGameOpen(false);
+      setNewGame({ sport: "BASKETBALL", opponent: "", isHome: true, gameDate: "" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const createMarketMutation = useMutation({
+    mutationFn: async (gameId: string) => {
+      const res = await apiRequest("POST", `/api/admin/games/${gameId}/create-market`, {});
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.message || "Failed to create market");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/games"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/markets"] });
+      toast({ title: "Market created for game" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const updateScoreMutation = useMutation({
+    mutationFn: async ({ gameId, menloScore, opponentScore }: { gameId: string; menloScore: number; opponentScore: number }) => {
+      const res = await apiRequest("POST", `/api/admin/games/${gameId}/score`, { menloScore, opponentScore });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.message || "Failed to update score");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/games"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/markets"] });
+      toast({ title: "Score updated and market resolved" });
+      setScoreDialogOpen(null);
+      setMenloScore("");
+      setOpponentScore("");
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const deleteGameMutation = useMutation({
+    mutationFn: async (gameId: string) => {
+      const res = await apiRequest("DELETE", `/api/admin/games/${gameId}`, {});
+      if (!res.ok) throw new Error("Failed to delete game");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/games"] });
+      toast({ title: "Game deleted" });
+    },
+  });
+
+  const handleCreateGame = () => {
+    if (!newGame.opponent || !newGame.gameDate) {
+      toast({ title: "Please fill all fields", variant: "destructive" });
+      return;
+    }
+    createGameMutation.mutate(newGame);
+  };
+
+  const handleUpdateScore = (gameId: string) => {
+    const mScore = parseInt(menloScore);
+    const oScore = parseInt(opponentScore);
+    if (isNaN(mScore) || isNaN(oScore) || mScore < 0 || oScore < 0) {
+      toast({ title: "Please enter valid scores", variant: "destructive" });
+      return;
+    }
+    updateScoreMutation.mutate({ gameId, menloScore: mScore, opponentScore: oScore });
+  };
+
+  const formatDate = (date: Date | string) => {
+    return new Date(date).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
 
   if (!user || user.role !== "ADMIN") {
     return (
@@ -97,7 +253,7 @@ export default function Admin() {
           </div>
         </div>
 
-        <div className="mb-8 grid gap-4 md:grid-cols-3">
+        <div className="mb-8 grid gap-4 md:grid-cols-4">
           <Card>
             <CardContent className="flex items-center gap-4 pt-6">
               <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-blue-500/10">
@@ -133,6 +289,17 @@ export default function Admin() {
               </div>
             </CardContent>
           </Card>
+          <Card>
+            <CardContent className="flex items-center gap-4 pt-6">
+              <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-green-500/10">
+                <Calendar className="h-6 w-6 text-green-600 dark:text-green-400" />
+              </div>
+              <div>
+                <p className="text-2xl font-bold">{games?.length ?? 0}</p>
+                <p className="text-sm text-muted-foreground">Games</p>
+              </div>
+            </CardContent>
+          </Card>
         </div>
 
         <Tabs defaultValue="reports">
@@ -144,6 +311,10 @@ export default function Admin() {
             <TabsTrigger value="users" className="gap-2" data-testid="tab-admin-users">
               <Users className="h-4 w-4" />
               Users
+            </TabsTrigger>
+            <TabsTrigger value="games" className="gap-2" data-testid="tab-admin-games">
+              <Calendar className="h-4 w-4" />
+              Games
             </TabsTrigger>
           </TabsList>
 
@@ -169,10 +340,10 @@ export default function Admin() {
                     {reports.map((report) => (
                       <div
                         key={report.id}
-                        className="flex items-start justify-between gap-4 rounded-lg border p-4"
+                        className="flex flex-wrap items-start justify-between gap-4 rounded-lg border p-4"
                       >
                         <div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
                             <Badge variant={report.status === "PENDING" ? "default" : "secondary"}>
                               {report.status}
                             </Badge>
@@ -195,6 +366,7 @@ export default function Admin() {
                                 })
                               }
                               disabled={resolveReportMutation.isPending}
+                              data-testid={`button-dismiss-report-${report.id}`}
                             >
                               <XCircle className="mr-1 h-4 w-4" />
                               Dismiss
@@ -209,6 +381,7 @@ export default function Admin() {
                                 })
                               }
                               disabled={resolveReportMutation.isPending}
+                              data-testid={`button-hide-content-${report.id}`}
                             >
                               <EyeOff className="mr-1 h-4 w-4" />
                               Hide Content
@@ -240,10 +413,10 @@ export default function Admin() {
                     {users?.map((u) => (
                       <div
                         key={u.id}
-                        className="flex items-center justify-between gap-4 rounded-lg border p-4"
+                        className="flex flex-wrap items-center justify-between gap-4 rounded-lg border p-4"
                       >
                         <div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
                             <span className="font-medium">{u.displayName}</span>
                             <Badge
                               variant={
@@ -271,6 +444,7 @@ export default function Admin() {
                             variant="destructive"
                             onClick={() => suspendUserMutation.mutate(u.id)}
                             disabled={suspendUserMutation.isPending}
+                            data-testid={`button-suspend-user-${u.id}`}
                           >
                             {suspendUserMutation.isPending ? (
                               <Loader2 className="h-4 w-4 animate-spin" />
@@ -282,6 +456,249 @@ export default function Admin() {
                             )}
                           </Button>
                         )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="games" className="mt-4">
+            <Card>
+              <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
+                <CardTitle>Games Management</CardTitle>
+                <Dialog open={isCreateGameOpen} onOpenChange={setIsCreateGameOpen}>
+                  <DialogTrigger asChild>
+                    <Button size="sm" data-testid="button-create-game">
+                      <Plus className="mr-1 h-4 w-4" />
+                      Add Game
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Create New Game</DialogTitle>
+                    </DialogHeader>
+                    <div className="space-y-4 pt-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="sport">Sport</Label>
+                        <Select
+                          value={newGame.sport}
+                          onValueChange={(value) => setNewGame({ ...newGame, sport: value as typeof SPORTS[number] })}
+                        >
+                          <SelectTrigger data-testid="select-sport">
+                            <SelectValue placeholder="Select sport" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {SPORTS.map((sport) => (
+                              <SelectItem key={sport} value={sport}>
+                                {sport.charAt(0) + sport.slice(1).toLowerCase()}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="opponent">Opponent</Label>
+                        <Input
+                          id="opponent"
+                          value={newGame.opponent}
+                          onChange={(e) => setNewGame({ ...newGame, opponent: e.target.value })}
+                          placeholder="e.g., Sacred Heart Prep"
+                          data-testid="input-opponent"
+                        />
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <Label htmlFor="isHome">Home Game</Label>
+                        <Switch
+                          id="isHome"
+                          checked={newGame.isHome}
+                          onCheckedChange={(checked) => setNewGame({ ...newGame, isHome: checked })}
+                          data-testid="switch-home-away"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="gameDate">Game Date & Time</Label>
+                        <Input
+                          id="gameDate"
+                          type="datetime-local"
+                          value={newGame.gameDate}
+                          onChange={(e) => setNewGame({ ...newGame, gameDate: e.target.value })}
+                          data-testid="input-game-date"
+                        />
+                      </div>
+                      <Button
+                        onClick={handleCreateGame}
+                        disabled={createGameMutation.isPending}
+                        className="w-full"
+                        data-testid="button-submit-create-game"
+                      >
+                        {createGameMutation.isPending ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          "Create Game"
+                        )}
+                      </Button>
+                    </div>
+                  </DialogContent>
+                </Dialog>
+              </CardHeader>
+              <CardContent>
+                {gamesLoading ? (
+                  <div className="space-y-4">
+                    {Array.from({ length: 3 }).map((_, i) => (
+                      <Skeleton key={i} className="h-20" />
+                    ))}
+                  </div>
+                ) : !games?.length ? (
+                  <div className="py-8 text-center">
+                    <Calendar className="mx-auto h-12 w-12 text-muted-foreground" />
+                    <p className="mt-4 text-muted-foreground">No games scheduled</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {games.map((game) => (
+                      <div
+                        key={game.id}
+                        className="flex flex-wrap items-center justify-between gap-4 rounded-lg border p-4"
+                        data-testid={`game-row-${game.id}`}
+                      >
+                        <div className="flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge variant="outline">
+                              {game.sport.charAt(0) + game.sport.slice(1).toLowerCase()}
+                            </Badge>
+                            <span className="font-medium">vs {game.opponent}</span>
+                            <Badge variant={game.isHome ? "default" : "secondary"}>
+                              {game.isHome ? "Home" : "Away"}
+                            </Badge>
+                          </div>
+                          <p className="mt-1 text-sm text-muted-foreground">
+                            {formatDate(game.gameDate)}
+                          </p>
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            <Badge
+                              variant={
+                                game.status === "COMPLETED"
+                                  ? "default"
+                                  : game.status === "IN_PROGRESS"
+                                  ? "secondary"
+                                  : game.status === "CANCELLED"
+                                  ? "destructive"
+                                  : "outline"
+                              }
+                            >
+                              {game.status}
+                            </Badge>
+                            {game.menloScore !== null && game.opponentScore !== null && (
+                              <span className="text-sm font-medium">
+                                Menlo {game.menloScore} - {game.opponentScore} {game.opponent}
+                              </span>
+                            )}
+                            {game.marketId ? (
+                              <Badge variant="secondary">Market Active</Badge>
+                            ) : (
+                              <Badge variant="outline">No Market</Badge>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {!game.marketId && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => createMarketMutation.mutate(game.id)}
+                              disabled={createMarketMutation.isPending}
+                              data-testid={`button-create-market-${game.id}`}
+                            >
+                              {createMarketMutation.isPending ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <>
+                                  <Plus className="mr-1 h-4 w-4" />
+                                  Create Market
+                                </>
+                              )}
+                            </Button>
+                          )}
+                          <Dialog
+                            open={scoreDialogOpen === game.id}
+                            onOpenChange={(open) => {
+                              setScoreDialogOpen(open ? game.id : null);
+                              if (!open) {
+                                setMenloScore("");
+                                setOpponentScore("");
+                              }
+                            }}
+                          >
+                            <DialogTrigger asChild>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                data-testid={`button-enter-score-${game.id}`}
+                              >
+                                <Trophy className="mr-1 h-4 w-4" />
+                                Enter Score
+                              </Button>
+                            </DialogTrigger>
+                            <DialogContent>
+                              <DialogHeader>
+                                <DialogTitle>Enter Final Score</DialogTitle>
+                              </DialogHeader>
+                              <div className="space-y-4 pt-4">
+                                <div className="space-y-2">
+                                  <Label htmlFor="menloScore">Menlo Score</Label>
+                                  <Input
+                                    id="menloScore"
+                                    type="number"
+                                    min="0"
+                                    value={menloScore}
+                                    onChange={(e) => setMenloScore(e.target.value)}
+                                    placeholder="0"
+                                    data-testid="input-menlo-score"
+                                  />
+                                </div>
+                                <div className="space-y-2">
+                                  <Label htmlFor="opponentScore">{game.opponent} Score</Label>
+                                  <Input
+                                    id="opponentScore"
+                                    type="number"
+                                    min="0"
+                                    value={opponentScore}
+                                    onChange={(e) => setOpponentScore(e.target.value)}
+                                    placeholder="0"
+                                    data-testid="input-opponent-score"
+                                  />
+                                </div>
+                                <Button
+                                  onClick={() => handleUpdateScore(game.id)}
+                                  disabled={updateScoreMutation.isPending}
+                                  className="w-full"
+                                  data-testid="button-submit-score"
+                                >
+                                  {updateScoreMutation.isPending ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    "Save Score"
+                                  )}
+                                </Button>
+                              </div>
+                            </DialogContent>
+                          </Dialog>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={() => deleteGameMutation.mutate(game.id)}
+                            disabled={deleteGameMutation.isPending}
+                            data-testid={`button-delete-game-${game.id}`}
+                          >
+                            {deleteGameMutation.isPending ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </div>
                       </div>
                     ))}
                   </div>

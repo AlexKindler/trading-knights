@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import session from "express-session";
 import MemoryStore from "memorystore";
 import { storage } from "./storage";
-import { insertUserSchema, loginSchema, insertTradeSchema, insertCommentSchema, insertReportSchema } from "@shared/schema";
+import { insertUserSchema, loginSchema, insertTradeSchema, insertCommentSchema, insertReportSchema, insertGameSchema } from "@shared/schema";
 import { createHash } from "crypto";
 import { sendVerificationEmail, sendPasswordResetEmail } from "./email";
 
@@ -666,6 +666,147 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Get pending markets error:", error);
       res.status(500).json({ message: "Failed to fetch pending markets" });
+    }
+  });
+
+  // ==================== GAMES ROUTES ====================
+
+  app.get("/api/admin/games", requireAdmin, async (req, res) => {
+    try {
+      const games = await storage.getAllGames();
+      res.json(games);
+    } catch (error) {
+      console.error("Get games error:", error);
+      res.status(500).json({ message: "Failed to fetch games" });
+    }
+  });
+
+  app.post("/api/admin/games", requireAdmin, async (req, res) => {
+    try {
+      const parsed = insertGameSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: parsed.error.errors[0].message });
+      }
+
+      const game = await storage.createGame({
+        ...parsed.data,
+        createdBy: req.session.userId!,
+      });
+
+      res.json(game);
+    } catch (error) {
+      console.error("Create game error:", error);
+      res.status(500).json({ message: "Failed to create game" });
+    }
+  });
+
+  app.post("/api/admin/games/:id/create-market", requireAdmin, async (req, res) => {
+    try {
+      const game = await storage.getGame(req.params.id);
+      if (!game) {
+        return res.status(404).json({ message: "Game not found" });
+      }
+
+      if (game.marketId) {
+        return res.status(400).json({ message: "Market already exists for this game" });
+      }
+
+      const sportName = game.sport.charAt(0) + game.sport.slice(1).toLowerCase();
+      const market = await storage.createMarket({
+        type: "PREDICTION",
+        title: `Menlo ${sportName} vs ${game.opponent}: Will Menlo win?`,
+        description: `Prediction market for the ${sportName} game against ${game.opponent}. Resolves YES if Menlo wins, NO if Menlo loses or ties.`,
+        category: "Sports",
+        status: "OPEN",
+        closeAt: game.gameDate,
+        resolveAt: new Date(new Date(game.gameDate).getTime() + 24 * 60 * 60 * 1000),
+        resolutionRule: "Based on official game results",
+        createdBy: req.session.userId!,
+      });
+
+      await storage.createOutcome({
+        marketId: market.id,
+        label: "Yes",
+        currentPrice: 0.5,
+      });
+
+      await storage.createOutcome({
+        marketId: market.id,
+        label: "No",
+        currentPrice: 0.5,
+      });
+
+      await storage.updateGame(game.id, { marketId: market.id });
+
+      res.json({ game: { ...game, marketId: market.id }, market });
+    } catch (error) {
+      console.error("Create market for game error:", error);
+      res.status(500).json({ message: "Failed to create market" });
+    }
+  });
+
+  app.post("/api/admin/games/:id/score", requireAdmin, async (req, res) => {
+    try {
+      const { menloScore, opponentScore } = req.body;
+      if (typeof menloScore !== "number" || typeof opponentScore !== "number") {
+        return res.status(400).json({ message: "Invalid scores" });
+      }
+
+      const game = await storage.getGame(req.params.id);
+      if (!game) {
+        return res.status(404).json({ message: "Game not found" });
+      }
+
+      const updatedGame = await storage.updateGame(game.id, {
+        menloScore,
+        opponentScore,
+        status: "COMPLETED",
+      });
+
+      if (game.marketId) {
+        const market = await storage.getMarket(game.marketId);
+        if (market && market.status === "OPEN") {
+          const outcomes = await storage.getOutcomesByMarket(game.marketId);
+          const yesOutcome = outcomes.find((o) => o.label === "Yes");
+          const noOutcome = outcomes.find((o) => o.label === "No");
+
+          if (!yesOutcome || !noOutcome) {
+            console.warn("Market missing expected Yes/No outcomes, skipping resolution");
+          } else if (menloScore === opponentScore) {
+            // Tie game - don't resolve market, mark as cancelled
+            await storage.updateMarket(game.marketId, { status: "CLOSED" });
+            // Refund logic would go here in a real system
+            console.log("Game tied - market closed without resolution");
+          } else {
+            // Resolve market based on winner
+            await storage.updateMarket(game.marketId, { status: "RESOLVED" });
+            const menloWon = menloScore > opponentScore;
+            const winningOutcome = menloWon ? yesOutcome : noOutcome;
+            const losingOutcome = menloWon ? noOutcome : yesOutcome;
+
+            await storage.updateOutcome(winningOutcome.id, { currentPrice: 1 });
+            await storage.updateOutcome(losingOutcome.id, { currentPrice: 0 });
+          }
+        }
+      }
+
+      res.json(updatedGame);
+    } catch (error) {
+      console.error("Update game score error:", error);
+      res.status(500).json({ message: "Failed to update score" });
+    }
+  });
+
+  app.delete("/api/admin/games/:id", requireAdmin, async (req, res) => {
+    try {
+      const deleted = await storage.deleteGame(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Game not found" });
+      }
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Delete game error:", error);
+      res.status(500).json({ message: "Failed to delete game" });
     }
   });
 
