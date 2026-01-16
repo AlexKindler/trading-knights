@@ -11,6 +11,7 @@ Key features include:
 - Play money system with bankruptcy protection
 - Content moderation and admin controls
 - Leaderboard and portfolio tracking
+- Admin sports game management with auto-market creation
 
 ## User Preferences
 
