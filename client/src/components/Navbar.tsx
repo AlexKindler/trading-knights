@@ -10,7 +10,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { TrendingUp, BarChart3, Wallet, Trophy, Menu, LogOut, User, Shield, Search, Sun, Moon } from "lucide-react";
+import { TrendingUp, BarChart3, Wallet, Trophy, Menu, LogOut, User, Shield, Search, Sun, Moon, Brain } from "lucide-react";
 import { useState, useEffect } from "react";
 
 const navItems = [
@@ -18,6 +18,7 @@ const navItems = [
   { href: "/stocks", label: "Stocks", icon: BarChart3 },
   { href: "/portfolio", label: "Wallet", icon: Wallet },
   { href: "/leaderboard", label: "Leaderboard", icon: Trophy },
+  { href: "/mk-ai", label: "MK AI", icon: Brain },
 ];
 
 export function Navbar() {

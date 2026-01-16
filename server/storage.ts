@@ -117,6 +117,7 @@ export class MemStorage implements IStorage {
       balance: 10000,
       disclaimerAcceptedAt: new Date(),
       lastBankruptcyReset: null,
+      hasMkAiAccess: false,
       createdAt: new Date(),
     });
 
@@ -134,6 +135,7 @@ export class MemStorage implements IStorage {
       balance: 1250,
       disclaimerAcceptedAt: new Date(),
       lastBankruptcyReset: null,
+      hasMkAiAccess: false,
       createdAt: new Date(),
     });
 
@@ -162,6 +164,7 @@ export class MemStorage implements IStorage {
         balance: u.balance,
         disclaimerAcceptedAt: new Date(),
         lastBankruptcyReset: null,
+        hasMkAiAccess: false,
         createdAt: new Date(),
       });
     });

@@ -9,7 +9,7 @@ export type UserStatus = "PENDING_VERIFICATION" | "VERIFIED" | "SUSPENDED";
 export type MarketType = "PREDICTION" | "STOCK";
 export type MarketStatus = "OPEN" | "CLOSED" | "RESOLVED" | "HIDDEN";
 export type TradeSide = "BUY" | "SELL";
-export type BalanceEventType = "STARTING_CREDIT" | "BANKRUPTCY_RESET" | "ADMIN_ADJUST" | "TRADE";
+export type BalanceEventType = "STARTING_CREDIT" | "BANKRUPTCY_RESET" | "ADMIN_ADJUST" | "TRADE" | "MK_AI_PURCHASE";
 export type ReportTargetType = "MARKET" | "COMMENT" | "USER";
 export type ReportStatus = "PENDING" | "REVIEWED" | "DISMISSED";
 
@@ -26,6 +26,7 @@ export const users = pgTable("users", {
   balance: integer("balance").notNull().default(0),
   disclaimerAcceptedAt: timestamp("disclaimer_accepted_at"),
   lastBankruptcyReset: timestamp("last_bankruptcy_reset"),
+  hasMkAiAccess: boolean("has_mk_ai_access").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

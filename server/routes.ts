@@ -604,5 +604,57 @@ export async function registerRoutes(
     }
   });
 
+  // ==================== MK AI ROUTES ====================
+
+  const MK_AI_PRICE = 10000;
+
+  app.get("/api/mk-ai/access", requireAuth, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      res.json({ hasAccess: user.hasMkAiAccess ?? false });
+    } catch (error) {
+      console.error("Get MK AI access error:", error);
+      res.status(500).json({ message: "Failed to check access" });
+    }
+  });
+
+  app.post("/api/mk-ai/purchase", requireVerified, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      if (user.hasMkAiAccess) {
+        return res.status(400).json({ message: "You already have MK AI access" });
+      }
+
+      if (user.balance < MK_AI_PRICE) {
+        return res.status(400).json({ message: "Insufficient balance. You need $10,000 to purchase MK AI." });
+      }
+
+      const newBalance = user.balance - MK_AI_PRICE;
+      await storage.updateUser(user.id, {
+        balance: newBalance,
+        hasMkAiAccess: true,
+      });
+
+      await storage.logBalanceEvent({
+        userId: user.id,
+        type: "MK_AI_PURCHASE",
+        amount: -MK_AI_PRICE,
+        note: "Purchased MK AI access",
+      });
+
+      res.json({ success: true, newBalance, hasAccess: true });
+    } catch (error) {
+      console.error("Purchase MK AI error:", error);
+      res.status(500).json({ message: "Failed to purchase MK AI" });
+    }
+  });
+
   return httpServer;
 }
