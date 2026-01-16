@@ -2,12 +2,11 @@ import { useQuery } from "@tanstack/react-query";
 import {
   ComposedChart,
   Bar,
+  Line,
   XAxis,
   YAxis,
   Tooltip,
   ResponsiveContainer,
-  Cell,
-  ReferenceLine,
 } from "recharts";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { StockCandle } from "@shared/schema";
@@ -29,6 +28,7 @@ interface CandleData {
   bodyHeight: number;
   wickTop: number;
   wickBottom: number;
+  ma7?: number;
 }
 
 export function CandlestickChart({ marketId }: CandlestickChartProps) {
@@ -49,10 +49,16 @@ export function CandlestickChart({ marketId }: CandlestickChartProps) {
     );
   }
 
-  const chartData: CandleData[] = candles.map((candle) => {
+  const chartData: CandleData[] = candles.map((candle, index) => {
     const isUp = candle.close >= candle.open;
     const bodyTop = Math.max(candle.open, candle.close);
     const bodyBottom = Math.min(candle.open, candle.close);
+    
+    let ma7: number | undefined;
+    if (index >= 6) {
+      const sum = candles.slice(index - 6, index + 1).reduce((acc, c) => acc + c.close, 0);
+      ma7 = sum / 7;
+    }
     
     return {
       date: new Date(candle.timestamp).toLocaleDateString("en-US", {
@@ -70,11 +76,12 @@ export function CandlestickChart({ marketId }: CandlestickChartProps) {
       bodyHeight: Math.max(bodyTop - bodyBottom, 0.01),
       wickTop: candle.high,
       wickBottom: candle.low,
+      ma7,
     };
   });
 
-  const minPrice = Math.min(...chartData.map((d) => d.low)) * 0.98;
-  const maxPrice = Math.max(...chartData.map((d) => d.high)) * 1.02;
+  const minPrice = Math.min(...chartData.map((d) => d.low)) * 0.995;
+  const maxPrice = Math.max(...chartData.map((d) => d.high)) * 1.005;
 
   const CustomCandlestick = (props: any) => {
     const { x, y, width, height, payload } = props;
@@ -146,7 +153,7 @@ export function CandlestickChart({ marketId }: CandlestickChartProps) {
   };
 
   return (
-    <div className="h-64" data-testid="candlestick-chart">
+    <div className="h-80" data-testid="candlestick-chart">
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
           <XAxis
@@ -169,6 +176,15 @@ export function CandlestickChart({ marketId }: CandlestickChartProps) {
             dataKey="bodyHeight"
             shape={<CustomCandlestick />}
             isAnimationActive={false}
+          />
+          <Line
+            type="monotone"
+            dataKey="ma7"
+            stroke="#f59e0b"
+            strokeWidth={2}
+            dot={false}
+            connectNulls
+            name="7-Day MA"
           />
         </ComposedChart>
       </ResponsiveContainer>
