@@ -316,6 +316,8 @@ export class MemStorage implements IStorage {
     const stocks = [
       { ticker: "BIZ", name: "Business Club", category: "Clubs", price: 40, description: "Trade shares of the Menlo Business Club. Performance based on competition results and entrepreneurship initiatives." },
       { ticker: "FISH", name: "Fishing Club", category: "Clubs", price: 25, description: "Trade shares of the Menlo Fishing Club. Value based on catch rates and outdoor activity engagement." },
+      { ticker: "GAME", name: "Gaming Club", category: "Clubs", price: 35, description: "Trade shares of the Menlo Gaming Club. Value based on tournament performance and esports engagement." },
+      { ticker: "RUN", name: "Run Club", category: "Clubs", price: 30, description: "Trade shares of the Menlo Run Club. Performance based on race results and membership participation." },
     ];
 
     stocks.forEach((s) => {
