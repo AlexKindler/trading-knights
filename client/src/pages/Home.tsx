@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { MarketCard } from "@/components/MarketCard";
 import { StockCard } from "@/components/StockCard";
+import { StockTicker } from "@/components/StockTicker";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/context/AuthContext";
 import {
@@ -34,6 +35,7 @@ export default function Home() {
 
   return (
     <div className="min-h-screen">
+      <StockTicker />
       <section className="border-b bg-gradient-to-b from-primary/5 to-background px-4 py-16">
         <div className="mx-auto max-w-4xl text-center">
           <Badge variant="secondary" className="mb-4">

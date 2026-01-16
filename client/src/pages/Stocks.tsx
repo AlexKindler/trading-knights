@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StockCard } from "@/components/StockCard";
+import { StockTicker } from "@/components/StockTicker";
 import { useAuth } from "@/context/AuthContext";
 import { Search, Plus, BarChart3, TrendingUp, TrendingDown, Activity } from "lucide-react";
 import type { MarketWithDetails } from "@shared/schema";
@@ -67,8 +68,9 @@ export default function Stocks() {
     .slice(0, 3);
 
   return (
-    <div className="min-h-screen px-4 py-8">
-      <div className="mx-auto max-w-7xl">
+    <div className="min-h-screen">
+      <StockTicker />
+      <div className="px-4 py-8 mx-auto max-w-7xl">
         <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="flex items-center gap-2 text-3xl font-bold">
