@@ -1,8 +1,8 @@
-# MK Markets
+# Trading Knights
 
 ## Overview
 
-MK Markets is a school-only prediction market and fake stock trading platform designed for Menlo School students. The application allows students to create and trade on prediction markets for school events (sports, elections, clubs) and fictional stocks representing school-related entities. Built with fake money only for educational purposes - no real gambling, cash-out, or prizes.
+Trading Knights is a school-only prediction market and fake stock trading platform designed for Menlo School students. The application allows students to create and trade on prediction markets for school events (sports, elections, clubs) and fictional stocks representing school-related entities. Built with fake money only for educational purposes - no real gambling, cash-out, or prizes.
 
 Key features include:
 - Prediction markets (Kalshi-style) for school outcomes

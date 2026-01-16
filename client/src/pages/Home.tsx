@@ -42,7 +42,7 @@ export default function Home() {
             Menlo School Edition
           </Badge>
           <h1 className="text-4xl font-bold tracking-tight sm:text-5xl md:text-6xl">
-            MK Markets
+            Trading Knights
           </h1>
           <p className="mx-auto mt-4 max-w-2xl text-lg text-muted-foreground">
             Predict outcomes and trade stocks for school events, sports, and more.

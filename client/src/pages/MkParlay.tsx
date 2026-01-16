@@ -40,7 +40,7 @@ export default function MkParlay() {
             MK Parlay
           </h1>
           <p className="mx-auto mt-4 max-w-2xl text-lg text-muted-foreground">
-            Bet on sports prediction markets with MK Markets play money. Odds update based on trading activity.
+            Bet on sports prediction markets with Trading Knights play money. Odds update based on trading activity.
           </p>
           <Badge variant="secondary" className="mt-4" data-testid="badge-powered-by">
             Powered by Polymarket
@@ -180,7 +180,7 @@ export default function MkParlay() {
 
         <div className="mt-12 text-center">
           <p className="text-sm text-muted-foreground">
-            Trade with MK Markets play money. Odds are calculated based on platform trading activity.
+            Trade with Trading Knights play money. Odds are calculated based on platform trading activity.
           </p>
         </div>
       </div>

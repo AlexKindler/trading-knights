@@ -1,4 +1,4 @@
-# MK Markets Design Guidelines
+# Trading Knights Design Guidelines
 
 ## Design Approach
 **Reference-Based Approach** drawing from modern fintech and prediction market platforms:
@@ -42,7 +42,7 @@ Core principle: Make complex financial data digestible and engaging for students
 
 ### Navigation
 Top navbar with logo left, nav items center, user menu right. Include:
-- MK Markets logo
+- Trading Knights logo
 - Markets, Stocks, Wallet, Leaderboard tabs
 - Search bar (expandable on mobile)
 - Balance display (prominent, monospace font)
