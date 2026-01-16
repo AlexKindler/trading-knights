@@ -32,6 +32,11 @@ export interface IStorage {
   createVerificationToken(userId: string): Promise<string>;
   verifyToken(token: string): Promise<User | null>;
 
+  // Password reset
+  createPasswordResetToken(userId: string): Promise<string>;
+  verifyPasswordResetToken(token: string): Promise<User | null>;
+  markPasswordResetTokenUsed(token: string): Promise<void>;
+
   // Markets
   getMarkets(type?: string): Promise<MarketWithDetails[]>;
   getMarket(id: string): Promise<MarketWithDetails | undefined>;
@@ -87,6 +92,7 @@ export interface IStorage {
 export class MemStorage implements IStorage {
   private users: Map<string, User> = new Map();
   private verificationTokens: Map<string, { userId: string; expiresAt: Date }> = new Map();
+  private passwordResetTokens: Map<string, { userId: string; expiresAt: Date; used: boolean }> = new Map();
   private markets: Map<string, Market> = new Map();
   private outcomes: Map<string, Outcome> = new Map();
   private stockMetas: Map<string, StockMeta> = new Map();
@@ -393,6 +399,7 @@ export class MemStorage implements IStorage {
       balance: 0,
       disclaimerAcceptedAt: null,
       lastBankruptcyReset: null,
+      hasMkAiAccess: false,
       createdAt: new Date(),
     };
     this.users.set(id, newUser);
@@ -449,6 +456,37 @@ export class MemStorage implements IStorage {
 
     this.verificationTokens.delete(tokenHash);
     return updatedUser || null;
+  }
+
+  async createPasswordResetToken(userId: string): Promise<string> {
+    const token = randomUUID();
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+    this.passwordResetTokens.set(tokenHash, {
+      userId,
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000), // 1 hour
+      used: false,
+    });
+    return token;
+  }
+
+  async verifyPasswordResetToken(token: string): Promise<User | null> {
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+    const record = this.passwordResetTokens.get(tokenHash);
+    if (!record) return null;
+    if (record.expiresAt < new Date() || record.used) {
+      return null;
+    }
+    const user = await this.getUser(record.userId);
+    return user || null;
+  }
+
+  async markPasswordResetTokenUsed(token: string): Promise<void> {
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+    const record = this.passwordResetTokens.get(tokenHash);
+    if (record) {
+      record.used = true;
+      this.passwordResetTokens.set(tokenHash, record);
+    }
   }
 
   async getMarkets(type?: string): Promise<MarketWithDetails[]> {

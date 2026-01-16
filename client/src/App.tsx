@@ -17,6 +17,8 @@ import MkAi from "@/pages/MkAi";
 import Login from "@/pages/Login";
 import Register from "@/pages/Register";
 import VerifyEmail from "@/pages/VerifyEmail";
+import ForgotPassword from "@/pages/ForgotPassword";
+import ResetPassword from "@/pages/ResetPassword";
 import Admin from "@/pages/Admin";
 
 function Router() {
@@ -33,6 +35,8 @@ function Router() {
       <Route path="/login" component={Login} />
       <Route path="/register" component={Register} />
       <Route path="/verify-email" component={VerifyEmail} />
+      <Route path="/forgot-password" component={ForgotPassword} />
+      <Route path="/reset-password" component={ResetPassword} />
       <Route path="/admin" component={Admin} />
       <Route component={NotFound} />
     </Switch>

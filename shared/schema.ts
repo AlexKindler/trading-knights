@@ -39,6 +39,15 @@ export const emailVerificationTokens = pgTable("email_verification_tokens", {
   usedAt: timestamp("used_at"),
 });
 
+// Password reset tokens
+export const passwordResetTokens = pgTable("password_reset_tokens", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull(),
+  tokenHash: text("token_hash").notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  usedAt: timestamp("used_at"),
+});
+
 // Markets (both prediction and stock)
 export const markets = pgTable("markets", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
