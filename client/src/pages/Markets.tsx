@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { StockTicker } from "@/components/StockTicker";
 import { useAuth } from "@/context/AuthContext";
-import { Search, TrendingUp, TrendingDown, Zap, ArrowUpDown, DollarSign, Activity, Clock, BarChart2 } from "lucide-react";
+import { Search, TrendingUp, TrendingDown, Zap, ArrowUpDown, DollarSign, Clock, BarChart2 } from "lucide-react";
 import type { MarketWithDetails } from "@shared/schema";
 
 const categories = ["All", "Clubs", "Sports", "Events", "Food", "Activities"];
@@ -99,20 +99,6 @@ export default function Markets() {
             </Badge>
           </div>
         </div>
-
-        <Card className="mb-6 bg-gradient-to-r from-yellow-500/10 to-orange-500/10 border-yellow-500/20">
-          <CardContent className="py-4">
-            <div className="flex items-center gap-3">
-              <Activity className="h-5 w-5 text-yellow-500" />
-              <div>
-                <p className="font-medium">Trading Strategy</p>
-                <p className="text-sm text-muted-foreground">
-                  Focus on volatility and momentum. Watch for price swings and time your entries/exits.
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
 
         {stocks && stocks.length > 0 && (
           <div className="mb-8 grid gap-4 lg:grid-cols-3">
