@@ -72,8 +72,8 @@ export default function Home() {
                   </Button>
                 </Link>
                 <Link href="/portfolio">
-                  <Button variant="outline" size="lg" data-testid="button-view-portfolio">
-                    View Portfolio
+                  <Button variant="outline" size="lg" data-testid="button-view-wallet">
+                    View Wallet
                   </Button>
                 </Link>
               </>

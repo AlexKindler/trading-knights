@@ -16,7 +16,7 @@ import { useState, useEffect } from "react";
 const navItems = [
   { href: "/markets", label: "Markets", icon: TrendingUp },
   { href: "/stocks", label: "Stocks", icon: BarChart3 },
-  { href: "/portfolio", label: "Portfolio", icon: Wallet },
+  { href: "/portfolio", label: "Wallet", icon: Wallet },
   { href: "/leaderboard", label: "Leaderboard", icon: Trophy },
 ];
 
@@ -133,7 +133,7 @@ export function Navbar() {
                   <DropdownMenuItem asChild>
                     <Link href="/portfolio" className="flex cursor-pointer items-center gap-2">
                       <User className="h-4 w-4" />
-                      Portfolio
+                      Wallet
                     </Link>
                   </DropdownMenuItem>
                   {user.role === "ADMIN" && (

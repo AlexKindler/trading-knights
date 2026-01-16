@@ -3,7 +3,7 @@
 ## Design Approach
 **Reference-Based Approach** drawing from modern fintech and prediction market platforms:
 - **Kalshi/Polymarket**: Clean market card layouts, data visualization
-- **Robinhood**: Simplified trading interfaces, portfolio views
+- **Robinhood**: Simplified trading interfaces, wallet views
 - **Linear**: Modern dashboard aesthetics, typography hierarchy
 - **Notion**: Information density with breathing room
 
@@ -34,7 +34,7 @@ Core principle: Make complex financial data digestible and engaging for students
 
 **Grid Patterns**:
 - Market cards: grid-cols-1 md:grid-cols-2 lg:grid-cols-3
-- Portfolio assets: grid-cols-1 lg:grid-cols-2
+- Wallet assets: grid-cols-1 lg:grid-cols-2
 - Leaderboard + charts: Single column with max-w-6xl
 - Trading view: Two-column split (chart left, trade widget right) on desktop
 
@@ -43,7 +43,7 @@ Core principle: Make complex financial data digestible and engaging for students
 ### Navigation
 Top navbar with logo left, nav items center, user menu right. Include:
 - MK Markets logo
-- Markets, Stocks, Portfolio, Leaderboard tabs
+- Markets, Stocks, Wallet, Leaderboard tabs
 - Search bar (expandable on mobile)
 - Balance display (prominent, monospace font)
 - Profile dropdown with verification badge
@@ -80,14 +80,14 @@ Compact panel with:
 Full-width table with rankings:
 - Rank number (bold, large for top 3)
 - User display name + grade badge
-- Total portfolio value (large, monospace)
+- Total wallet value (large, monospace)
 - Gain/loss percentage
 - Top 3: Distinctive badges/icons (🥇🥈🥉)
 - Current user row: highlighted/bordered
 - Pagination for 50+ users
 - Filter tabs: All Time, This Week, This Month
 
-### Portfolio Dashboard
+### Wallet Dashboard
 Grid layout with modules:
 - Net worth card (prominent, top)
 - Cash balance card

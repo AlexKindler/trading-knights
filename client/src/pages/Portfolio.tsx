@@ -51,7 +51,7 @@ export default function Portfolio() {
         <Card className="max-w-md text-center">
           <CardContent className="pt-6">
             <Wallet className="mx-auto h-12 w-12 text-muted-foreground" />
-            <h2 className="mt-4 text-xl font-semibold">Sign in to view your portfolio</h2>
+            <h2 className="mt-4 text-xl font-semibold">Sign in to view your wallet</h2>
             <p className="mt-2 text-muted-foreground">
               Track your positions, trades, and performance
             </p>
@@ -93,7 +93,7 @@ export default function Portfolio() {
           <div>
             <h1 className="flex items-center gap-2 text-3xl font-bold">
               <Wallet className="h-8 w-8 text-primary" />
-              Portfolio
+              Wallet
             </h1>
             <p className="mt-1 text-muted-foreground">
               Track your positions and trading history
