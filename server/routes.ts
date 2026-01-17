@@ -75,20 +75,11 @@ export async function registerRoutes(
 
   // ==================== AUTH ROUTES ====================
 
-  const PROTECTED_DEVELOPER_EMAILS = [
-    "alex.kindler@menloschool.org",
-    "lincoln.bott@menloschool.org",
-  ];
-
   app.post("/api/auth/register", async (req, res) => {
     try {
       const parsed = insertUserSchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ message: parsed.error.errors[0].message });
-      }
-
-      if (PROTECTED_DEVELOPER_EMAILS.includes(parsed.data.email.toLowerCase())) {
-        return res.status(403).json({ message: "This email is reserved. Please use a different email address." });
       }
 
       const existing = await storage.getUserByEmail(parsed.data.email);
