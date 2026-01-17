@@ -88,21 +88,19 @@ export async function registerRoutes(
       }
 
       const user = await storage.createUser(parsed.data);
-      const token = await storage.createVerificationToken(user.id);
-
-      // Send verification email
-      const emailSent = await sendVerificationEmail(user.email, token);
       
-      if (!emailSent) {
-        // Fallback: log the verification link for debugging
-        console.log("\n========================================");
-        console.log("📧 VERIFICATION LINK (Email failed to send):");
-        console.log(`   ${process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : 'http://localhost:5000'}/verify-email?token=${token}`);
-        console.log("========================================\n");
-      }
+      // Auto-verify user and give starting balance
+      await storage.updateUser(user.id, { status: "VERIFIED", balance: 1000 });
+      await storage.logBalanceEvent({
+        userId: user.id,
+        type: "STARTING_CREDIT",
+        amount: 1000,
+        note: "Welcome bonus - starting balance",
+      });
 
+      const updatedUser = await storage.getUser(user.id);
       req.session.userId = user.id;
-      res.json({ user: { ...user, password: undefined } });
+      res.json({ user: { ...updatedUser, password: undefined } });
     } catch (error) {
       console.error("Registration error:", error);
       res.status(500).json({ message: "Registration failed" });
