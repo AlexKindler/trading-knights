@@ -75,6 +75,13 @@ export async function registerRoutes(
 
   // ==================== AUTH ROUTES ====================
 
+  // Developer emails - these accounts receive MK AI revenue split
+  // Once registered, these emails are protected and cannot be re-registered
+  const DEVELOPER_EMAILS = [
+    "alex.kindler@menloschool.org",
+    "lincoln.bott@menloschool.org",
+  ];
+
   app.post("/api/auth/register", async (req, res) => {
     try {
       const parsed = insertUserSchema.safeParse(req.body);
