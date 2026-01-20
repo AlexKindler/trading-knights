@@ -75,11 +75,6 @@ export async function registerRoutes(
 
   // ==================== AUTH ROUTES ====================
 
-  const DEVELOPER_EMAILS = [
-    "alex.kindler@menloschool.org",
-    "lincoln.bott@menloschool.org",
-  ];
-
   app.post("/api/auth/register", async (req, res) => {
     try {
       const parsed = insertUserSchema.safeParse(req.body);
@@ -93,36 +88,19 @@ export async function registerRoutes(
       }
 
       const user = await storage.createUser(parsed.data);
-      const isDeveloperEmail = DEVELOPER_EMAILS.includes(parsed.data.email.toLowerCase());
       
-      if (isDeveloperEmail) {
-        // Developer emails require email verification for security
-        const token = await storage.createVerificationToken(user.id);
-        const emailSent = await sendVerificationEmail(user.email, token);
-        
-        if (!emailSent) {
-          console.log("\n========================================");
-          console.log("DEVELOPER VERIFICATION LINK:");
-          console.log(`   ${process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : 'http://localhost:5000'}/verify-email?token=${token}`);
-          console.log("========================================\n");
-        }
-        
-        req.session.userId = user.id;
-        res.json({ user: { ...user, password: undefined }, requiresVerification: true });
-      } else {
-        // Regular users are auto-verified
-        await storage.updateUser(user.id, { status: "VERIFIED", balance: 1000 });
-        await storage.logBalanceEvent({
-          userId: user.id,
-          type: "STARTING_CREDIT",
-          amount: 1000,
-          note: "Welcome bonus - starting balance",
-        });
+      // Auto-verify all users and give starting balance
+      await storage.updateUser(user.id, { status: "VERIFIED", balance: 1000 });
+      await storage.logBalanceEvent({
+        userId: user.id,
+        type: "STARTING_CREDIT",
+        amount: 1000,
+        note: "Welcome bonus - starting balance",
+      });
 
-        const updatedUser = await storage.getUser(user.id);
-        req.session.userId = user.id;
-        res.json({ user: { ...updatedUser, password: undefined } });
-      }
+      const updatedUser = await storage.getUser(user.id);
+      req.session.userId = user.id;
+      res.json({ user: { ...updatedUser, password: undefined } });
     } catch (error) {
       console.error("Registration error:", error);
       res.status(500).json({ message: "Registration failed" });
