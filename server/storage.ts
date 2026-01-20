@@ -18,9 +18,26 @@ import {
   type MarketCandle,
   type Game,
   type PolymarketLink,
+  users,
+  markets,
+  outcomes,
+  stockMeta as stockMetaTable,
+  trades,
+  positions,
+  comments,
+  reports,
+  balanceEvents,
+  stockCandles,
+  marketCandles,
+  games,
+  polymarketLinks,
+  emailVerificationTokens,
+  passwordResetTokens,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { createHash } from "crypto";
+import { db } from "./db";
+import { eq, and, desc, sql, ne, isNull } from "drizzle-orm";
 
 export interface IStorage {
   // Users
@@ -234,6 +251,7 @@ export class MemStorage implements IStorage {
         description: m.description,
         category: m.category,
         status: "OPEN",
+        source: "INTERNAL",
         closeAt: m.closeAt,
         resolveAt: new Date(m.closeAt.getTime() + 7 * 24 * 60 * 60 * 1000),
         resolutionRule: m.resolutionRule,
@@ -376,6 +394,7 @@ export class MemStorage implements IStorage {
         description: s.description,
         category: s.category,
         status: "OPEN",
+        source: "INTERNAL",
         closeAt: null,
         resolveAt: null,
         resolutionRule: null,
@@ -963,4 +982,782 @@ export class MemStorage implements IStorage {
   }
 }
 
-export const storage = new MemStorage();
+function hashPassword(password: string): string {
+  return createHash("sha256").update(password).digest("hex");
+}
+
+export class DbStorage implements IStorage {
+  async getUser(id: string): Promise<User | undefined> {
+    const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
+    return result[0];
+  }
+
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const result = await db.select().from(users).where(eq(users.email, email)).limit(1);
+    return result[0];
+  }
+
+  async createUser(user: InsertUser & { id?: string }): Promise<User> {
+    const id = user.id || randomUUID();
+    const result = await db.insert(users).values({
+      id,
+      email: user.email,
+      password: hashPassword(user.password),
+      displayName: user.displayName,
+      grade: user.grade || null,
+      role: "STUDENT",
+      status: "VERIFIED",
+      emailVerifiedAt: new Date(),
+      balance: 1000,
+      disclaimerAcceptedAt: null,
+      lastBankruptcyReset: null,
+      hasMkAiAccess: false,
+    }).returning();
+
+    await this.logBalanceEvent({
+      userId: id,
+      type: "STARTING_CREDIT",
+      amount: 1000,
+      note: "Initial balance upon registration",
+    });
+
+    return result[0];
+  }
+
+  async updateUser(id: string, updates: Partial<User>): Promise<User | undefined> {
+    const result = await db.update(users).set(updates).where(eq(users.id, id)).returning();
+    return result[0];
+  }
+
+  async getAllUsers(): Promise<User[]> {
+    return db.select().from(users);
+  }
+
+  async createVerificationToken(userId: string): Promise<string> {
+    const token = randomUUID();
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+    await db.insert(emailVerificationTokens).values({
+      userId,
+      tokenHash,
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    });
+    return token;
+  }
+
+  async verifyToken(token: string): Promise<User | null> {
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+    const result = await db.select().from(emailVerificationTokens)
+      .where(eq(emailVerificationTokens.tokenHash, tokenHash)).limit(1);
+    
+    if (!result[0]) return null;
+    const record = result[0];
+    
+    if (record.expiresAt < new Date() || record.usedAt) {
+      return null;
+    }
+    
+    const user = await this.getUser(record.userId);
+    if (!user) return null;
+
+    const updatedUser = await this.updateUser(user.id, {
+      status: "VERIFIED",
+      emailVerifiedAt: new Date(),
+      balance: 1000,
+    });
+
+    await this.logBalanceEvent({
+      userId: user.id,
+      type: "STARTING_CREDIT",
+      amount: 1000,
+      note: "Initial balance upon email verification",
+    });
+
+    await db.update(emailVerificationTokens)
+      .set({ usedAt: new Date() })
+      .where(eq(emailVerificationTokens.tokenHash, tokenHash));
+
+    return updatedUser || null;
+  }
+
+  async createPasswordResetToken(userId: string): Promise<string> {
+    const token = randomUUID();
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+    await db.insert(passwordResetTokens).values({
+      userId,
+      tokenHash,
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+    });
+    return token;
+  }
+
+  async verifyPasswordResetToken(token: string): Promise<User | null> {
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+    const result = await db.select().from(passwordResetTokens)
+      .where(eq(passwordResetTokens.tokenHash, tokenHash)).limit(1);
+    
+    if (!result[0]) return null;
+    const record = result[0];
+    
+    if (record.expiresAt < new Date() || record.usedAt) {
+      return null;
+    }
+    
+    const user = await this.getUser(record.userId);
+    return user || null;
+  }
+
+  async markPasswordResetTokenUsed(token: string): Promise<void> {
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+    await db.update(passwordResetTokens)
+      .set({ usedAt: new Date() })
+      .where(eq(passwordResetTokens.tokenHash, tokenHash));
+  }
+
+  private async enrichMarket(market: Market): Promise<MarketWithDetails> {
+    const creator = await this.getUser(market.createdBy);
+    const marketOutcomes = market.type === "PREDICTION" 
+      ? await this.getOutcomesByMarket(market.id) 
+      : undefined;
+    const stockMetaData = market.type === "STOCK" 
+      ? await this.getStockMeta(market.id) 
+      : undefined;
+
+    return {
+      ...market,
+      outcomes: marketOutcomes,
+      stockMeta: stockMetaData,
+      creatorName: creator?.displayName,
+    };
+  }
+
+  async getMarkets(type?: string): Promise<MarketWithDetails[]> {
+    let query = db.select().from(markets)
+      .where(ne(markets.status, "HIDDEN"))
+      .orderBy(desc(markets.createdAt));
+    
+    const result = await query;
+    const filtered = type ? result.filter(m => m.type === type) : result;
+    return Promise.all(filtered.map((m) => this.enrichMarket(m)));
+  }
+
+  async getMarket(id: string): Promise<MarketWithDetails | undefined> {
+    const result = await db.select().from(markets).where(eq(markets.id, id)).limit(1);
+    if (!result[0]) return undefined;
+    return this.enrichMarket(result[0]);
+  }
+
+  async createMarket(market: Omit<Market, "id" | "createdAt">): Promise<Market> {
+    const id = randomUUID();
+    const result = await db.insert(markets).values({
+      ...market,
+      id,
+    }).returning();
+    return result[0];
+  }
+
+  async updateMarket(id: string, updates: Partial<Market>): Promise<Market | undefined> {
+    const result = await db.update(markets).set(updates).where(eq(markets.id, id)).returning();
+    return result[0];
+  }
+
+  async createOutcome(outcome: Omit<Outcome, "id">): Promise<Outcome> {
+    const id = randomUUID();
+    const result = await db.insert(outcomes).values({
+      ...outcome,
+      id,
+    }).returning();
+    return result[0];
+  }
+
+  async getOutcomesByMarket(marketId: string): Promise<Outcome[]> {
+    return db.select().from(outcomes).where(eq(outcomes.marketId, marketId));
+  }
+
+  async updateOutcome(id: string, updates: Partial<Outcome>): Promise<Outcome | undefined> {
+    const result = await db.update(outcomes).set(updates).where(eq(outcomes.id, id)).returning();
+    return result[0];
+  }
+
+  async createStockMeta(stockMetaData: Omit<StockMeta, "id">): Promise<StockMeta> {
+    const id = randomUUID();
+    const result = await db.insert(stockMetaTable).values({
+      ...stockMetaData,
+      id,
+    }).returning();
+    return result[0];
+  }
+
+  async getStockMeta(marketId: string): Promise<StockMeta | undefined> {
+    const result = await db.select().from(stockMetaTable)
+      .where(eq(stockMetaTable.marketId, marketId)).limit(1);
+    return result[0];
+  }
+
+  async updateStockMeta(marketId: string, updates: Partial<StockMeta>): Promise<StockMeta | undefined> {
+    const result = await db.update(stockMetaTable)
+      .set(updates)
+      .where(eq(stockMetaTable.marketId, marketId))
+      .returning();
+    return result[0];
+  }
+
+  async createTrade(trade: Omit<Trade, "id" | "createdAt">): Promise<Trade> {
+    const id = randomUUID();
+    const result = await db.insert(trades).values({
+      ...trade,
+      id,
+    }).returning();
+    return result[0];
+  }
+
+  async getTradesByUser(userId: string): Promise<Trade[]> {
+    return db.select().from(trades)
+      .where(eq(trades.userId, userId))
+      .orderBy(desc(trades.createdAt));
+  }
+
+  async getPosition(userId: string, marketId: string, outcomeId?: string): Promise<Position | undefined> {
+    let result;
+    if (outcomeId) {
+      result = await db.select().from(positions)
+        .where(and(
+          eq(positions.userId, userId),
+          eq(positions.marketId, marketId),
+          eq(positions.outcomeId, outcomeId)
+        )).limit(1);
+    } else {
+      result = await db.select().from(positions)
+        .where(and(
+          eq(positions.userId, userId),
+          eq(positions.marketId, marketId),
+          isNull(positions.outcomeId)
+        )).limit(1);
+    }
+    return result[0];
+  }
+
+  async upsertPosition(position: Omit<Position, "id">): Promise<Position> {
+    const existing = await this.getPosition(position.userId, position.marketId, position.outcomeId || undefined);
+    
+    if (existing) {
+      const result = await db.update(positions)
+        .set({ qty: position.qty, avgCost: position.avgCost })
+        .where(eq(positions.id, existing.id))
+        .returning();
+      return result[0];
+    }
+    
+    const id = randomUUID();
+    const result = await db.insert(positions).values({
+      ...position,
+      id,
+    }).returning();
+    return result[0];
+  }
+
+  async getPositionsByUser(userId: string): Promise<Position[]> {
+    return db.select().from(positions)
+      .where(and(
+        eq(positions.userId, userId),
+        sql`${positions.qty} > 0`
+      ));
+  }
+
+  async getCommentsByMarket(marketId: string): Promise<Comment[]> {
+    return db.select().from(comments)
+      .where(and(
+        eq(comments.marketId, marketId),
+        isNull(comments.hiddenAt)
+      ))
+      .orderBy(desc(comments.createdAt));
+  }
+
+  async createComment(comment: Omit<Comment, "id" | "createdAt" | "hiddenAt">): Promise<Comment> {
+    const id = randomUUID();
+    const result = await db.insert(comments).values({
+      ...comment,
+      id,
+      hiddenAt: null,
+    }).returning();
+    return result[0];
+  }
+
+  async createReport(report: Omit<Report, "id" | "createdAt" | "status">): Promise<Report> {
+    const id = randomUUID();
+    const result = await db.insert(reports).values({
+      ...report,
+      id,
+      status: "PENDING",
+    }).returning();
+    return result[0];
+  }
+
+  async getReports(): Promise<Report[]> {
+    return db.select().from(reports).orderBy(desc(reports.createdAt));
+  }
+
+  async updateReport(id: string, updates: Partial<Report>): Promise<Report | undefined> {
+    const result = await db.update(reports).set(updates).where(eq(reports.id, id)).returning();
+    return result[0];
+  }
+
+  async logBalanceEvent(event: Omit<BalanceEvent, "id" | "createdAt">): Promise<BalanceEvent> {
+    const id = randomUUID();
+    const result = await db.insert(balanceEvents).values({
+      ...event,
+      id,
+    }).returning();
+    return result[0];
+  }
+
+  async getLeaderboard(timeFilter?: string): Promise<LeaderboardEntry[]> {
+    const allUsers = await db.select().from(users)
+      .where(and(
+        eq(users.status, "VERIFIED"),
+        ne(users.role, "ADMIN")
+      ));
+
+    const entries: LeaderboardEntry[] = await Promise.all(
+      allUsers.map(async (user) => {
+        const userPositions = await this.getPositionsByUser(user.id);
+        let positionsValue = 0;
+
+        for (const pos of userPositions) {
+          if (pos.outcomeId) {
+            const outcomeResult = await db.select().from(outcomes)
+              .where(eq(outcomes.id, pos.outcomeId)).limit(1);
+            if (outcomeResult[0]) {
+              positionsValue += pos.qty * outcomeResult[0].currentPrice;
+            }
+          } else {
+            const stockMetaResult = await db.select().from(stockMetaTable)
+              .where(eq(stockMetaTable.marketId, pos.marketId)).limit(1);
+            if (stockMetaResult[0]) {
+              positionsValue += pos.qty * stockMetaResult[0].currentPrice;
+            }
+          }
+        }
+
+        const totalValue = user.balance + positionsValue;
+        const changePercent = ((totalValue - 1000) / 1000) * 100;
+
+        return {
+          rank: 0,
+          userId: user.id,
+          displayName: user.displayName,
+          grade: user.grade || undefined,
+          totalValue,
+          cashBalance: user.balance,
+          positionsValue,
+          changePercent,
+        };
+      })
+    );
+
+    entries.sort((a, b) => b.totalValue - a.totalValue);
+    entries.forEach((entry, index) => {
+      entry.rank = index + 1;
+    });
+
+    return entries;
+  }
+
+  async getPortfolio(userId: string): Promise<PortfolioSummary> {
+    const user = await this.getUser(userId);
+    if (!user) {
+      return {
+        totalValue: 0,
+        cashBalance: 0,
+        positionsValue: 0,
+        totalPnL: 0,
+        positions: [],
+        recentTrades: [],
+      };
+    }
+
+    const userPositions = await this.getPositionsByUser(userId);
+    const userTrades = await this.getTradesByUser(userId);
+
+    const enrichedPositions: PositionWithDetails[] = await Promise.all(
+      userPositions.map(async (pos) => {
+        const market = await this.getMarket(pos.marketId);
+        let currentPrice = 0;
+        let outcome: Outcome | undefined;
+        let stockMetaData: StockMeta | undefined;
+
+        if (pos.outcomeId) {
+          const outcomeResult = await db.select().from(outcomes)
+            .where(eq(outcomes.id, pos.outcomeId)).limit(1);
+          outcome = outcomeResult[0];
+          currentPrice = outcome?.currentPrice ?? 0;
+        } else {
+          const stockMetaResult = await db.select().from(stockMetaTable)
+            .where(eq(stockMetaTable.marketId, pos.marketId)).limit(1);
+          stockMetaData = stockMetaResult[0];
+          currentPrice = stockMetaData?.currentPrice ?? 0;
+        }
+
+        const currentValue = pos.qty * currentPrice;
+        const costBasis = pos.qty * pos.avgCost;
+        const pnl = currentValue - costBasis;
+
+        return {
+          ...pos,
+          market,
+          outcome,
+          stockMeta: stockMetaData,
+          currentValue,
+          pnl,
+        };
+      })
+    );
+
+    const positionsValue = enrichedPositions.reduce((sum, p) => sum + p.currentValue, 0);
+    const totalValue = user.balance + positionsValue;
+    const totalPnL = totalValue - 1000;
+
+    return {
+      totalValue,
+      cashBalance: user.balance,
+      positionsValue,
+      totalPnL,
+      positions: enrichedPositions,
+      recentTrades: userTrades.slice(0, 20),
+    };
+  }
+
+  async getStockCandles(marketId: string, limit: number = 100): Promise<StockCandle[]> {
+    const result = await db.select().from(stockCandles)
+      .where(eq(stockCandles.marketId, marketId))
+      .orderBy(desc(stockCandles.timestamp))
+      .limit(limit);
+    
+    return result.sort((a, b) => 
+      new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
+  }
+
+  async addStockCandle(candle: Omit<StockCandle, "id">): Promise<StockCandle> {
+    const id = randomUUID();
+    const result = await db.insert(stockCandles).values({
+      ...candle,
+      id,
+    }).returning();
+    return result[0];
+  }
+
+  async updateLatestCandle(marketId: string, price: number, volume: number): Promise<void> {
+    const latestCandles = await db.select().from(stockCandles)
+      .where(eq(stockCandles.marketId, marketId))
+      .orderBy(desc(stockCandles.timestamp))
+      .limit(1);
+
+    if (latestCandles.length === 0) {
+      await this.addStockCandle({
+        marketId,
+        open: price,
+        high: price,
+        low: price,
+        close: price,
+        volume,
+        timestamp: new Date(),
+      });
+      return;
+    }
+
+    const lastCandle = latestCandles[0];
+    const now = new Date();
+    const lastCandleTime = new Date(lastCandle.timestamp);
+    const isSameDay = lastCandleTime.toDateString() === now.toDateString();
+
+    if (isSameDay) {
+      await db.update(stockCandles)
+        .set({
+          close: price,
+          high: Math.max(lastCandle.high, price),
+          low: Math.min(lastCandle.low, price),
+          volume: lastCandle.volume + volume,
+        })
+        .where(eq(stockCandles.id, lastCandle.id));
+    } else {
+      await this.addStockCandle({
+        marketId,
+        open: price,
+        high: price,
+        low: price,
+        close: price,
+        volume,
+        timestamp: now,
+      });
+    }
+  }
+
+  async getMarketCandles(marketId: string, outcomeId: string, limit: number = 100): Promise<MarketCandle[]> {
+    const result = await db.select().from(marketCandles)
+      .where(and(
+        eq(marketCandles.marketId, marketId),
+        eq(marketCandles.outcomeId, outcomeId)
+      ))
+      .orderBy(desc(marketCandles.timestamp))
+      .limit(limit);
+
+    return result.sort((a, b) => 
+      new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
+  }
+
+  async createGame(game: Partial<Game>): Promise<Game> {
+    const id = randomUUID();
+    const result = await db.insert(games).values({
+      id,
+      sport: game.sport || "OTHER",
+      opponent: game.opponent || "",
+      isHome: game.isHome ?? true,
+      gameDate: game.gameDate || new Date(),
+      status: game.status || "UPCOMING",
+      menloScore: game.menloScore ?? null,
+      opponentScore: game.opponentScore ?? null,
+      marketId: game.marketId ?? null,
+      createdBy: game.createdBy || "",
+    }).returning();
+    return result[0];
+  }
+
+  async getGame(id: string): Promise<Game | undefined> {
+    const result = await db.select().from(games).where(eq(games.id, id)).limit(1);
+    return result[0];
+  }
+
+  async getAllGames(): Promise<Game[]> {
+    return db.select().from(games).orderBy(desc(games.gameDate));
+  }
+
+  async updateGame(id: string, updates: Partial<Game>): Promise<Game | undefined> {
+    const result = await db.update(games).set(updates).where(eq(games.id, id)).returning();
+    return result[0];
+  }
+
+  async deleteGame(id: string): Promise<boolean> {
+    const result = await db.delete(games).where(eq(games.id, id)).returning();
+    return result.length > 0;
+  }
+
+  async createPolymarketLink(link: Omit<PolymarketLink, "id" | "lastSynced">): Promise<PolymarketLink> {
+    const id = randomUUID();
+    const result = await db.insert(polymarketLinks).values({
+      ...link,
+      id,
+      lastSynced: new Date(),
+    }).returning();
+    return result[0];
+  }
+
+  async getPolymarketLink(marketId: string): Promise<PolymarketLink | undefined> {
+    const result = await db.select().from(polymarketLinks)
+      .where(eq(polymarketLinks.marketId, marketId)).limit(1);
+    return result[0];
+  }
+
+  async getPolymarketMarkets(): Promise<MarketWithDetails[]> {
+    const links = await db.select().from(polymarketLinks);
+    const polymarketMarketIds = new Set(links.map((link) => link.marketId));
+
+    const allMarkets = await db.select().from(markets)
+      .where(ne(markets.status, "HIDDEN"))
+      .orderBy(desc(markets.createdAt));
+
+    const filtered = allMarkets.filter(
+      (m) => m.source === "POLYMARKET" || polymarketMarketIds.has(m.id)
+    );
+
+    return Promise.all(filtered.map((m) => this.enrichMarket(m)));
+  }
+}
+
+// Database seeding function - runs once if database is empty
+async function seedDatabase(): Promise<void> {
+  const existingUsers = await db.select().from(users).limit(1);
+  if (existingUsers.length > 0) {
+    console.log("Database already seeded, skipping...");
+    return;
+  }
+
+  console.log("Seeding database with initial data...");
+
+  // Create admin user
+  const adminId = randomUUID();
+  await db.insert(users).values({
+    id: adminId,
+    email: "admin@menloschool.org",
+    password: hashPassword("admin123"),
+    displayName: "Admin",
+    grade: "Faculty",
+    role: "ADMIN",
+    status: "VERIFIED",
+    emailVerifiedAt: new Date(),
+    balance: 10000,
+    disclaimerAcceptedAt: new Date(),
+    hasMkAiAccess: false,
+  });
+
+  // Create demo student
+  const studentId = randomUUID();
+  await db.insert(users).values({
+    id: studentId,
+    email: "student@menloschool.org",
+    password: hashPassword("student123"),
+    displayName: "Demo Student",
+    grade: "Junior",
+    role: "STUDENT",
+    status: "VERIFIED",
+    emailVerifiedAt: new Date(),
+    balance: 1250,
+    disclaimerAcceptedAt: new Date(),
+    hasMkAiAccess: false,
+  });
+
+  // Create more demo users for leaderboard
+  const demoUsers = [
+    { name: "Alex Chen", grade: "Senior", balance: 2340 },
+    { name: "Jordan Smith", grade: "Junior", balance: 1890 },
+    { name: "Taylor Kim", grade: "Sophomore", balance: 1650 },
+    { name: "Casey Brown", grade: "Senior", balance: 1420 },
+    { name: "Morgan Lee", grade: "Freshman", balance: 980 },
+    { name: "Riley Wang", grade: "Junior", balance: 1780 },
+    { name: "Sam Patel", grade: "Senior", balance: 2100 },
+  ];
+
+  for (let i = 0; i < demoUsers.length; i++) {
+    const u = demoUsers[i];
+    await db.insert(users).values({
+      id: randomUUID(),
+      email: `demo${i + 1}@menloschool.org`,
+      password: hashPassword("demo123"),
+      displayName: u.name,
+      grade: u.grade,
+      role: "STUDENT",
+      status: "VERIFIED",
+      emailVerifiedAt: new Date(),
+      balance: u.balance,
+      disclaimerAcceptedAt: new Date(),
+      hasMkAiAccess: false,
+    });
+  }
+
+  // Create prediction markets
+  const predictionMarketsData = [
+    { title: "Will Menlo Robotics win at VEX States?", description: "Resolves YES if Menlo Robotics Club places 1st at the VEX State Championship.", category: "Clubs", closeAt: new Date(Date.now() + 45 * 24 * 60 * 60 * 1000), resolutionRule: "Based on official VEX competition results" },
+    { title: "Will Drama Club's spring show sell out?", description: "Resolves YES if all tickets for Drama Club's spring production are sold.", category: "Clubs", closeAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), resolutionRule: "Based on ticket sales records" },
+    { title: "Will Model UN win Best Delegation?", description: "Resolves YES if Menlo Model UN wins Best Delegation at the next major conference.", category: "Clubs", closeAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000), resolutionRule: "Based on official MUN awards" },
+    { title: "Will Spirit Week have 80%+ participation?", description: "Resolves YES if more than 80% of students participate in at least one Spirit Week event.", category: "Events", closeAt: new Date(Date.now() + 21 * 24 * 60 * 60 * 1000), resolutionRule: "Based on attendance records" },
+    { title: "Will the average AP Calc score be above 4.0?", description: "Resolves YES if the class average on AP Calculus exam exceeds 4.0.", category: "Academics", closeAt: new Date(Date.now() + 120 * 24 * 60 * 60 * 1000), resolutionRule: "Based on College Board results" },
+  ];
+
+  for (const m of predictionMarketsData) {
+    const marketId = randomUUID();
+    await db.insert(markets).values({
+      id: marketId,
+      type: "PREDICTION",
+      title: m.title,
+      description: m.description,
+      category: m.category,
+      status: "OPEN",
+      source: "INTERNAL",
+      closeAt: m.closeAt,
+      resolveAt: new Date(m.closeAt.getTime() + 7 * 24 * 60 * 60 * 1000),
+      resolutionRule: m.resolutionRule,
+      createdBy: adminId,
+    });
+
+    const yesPrice = 0.3 + Math.random() * 0.4;
+    await db.insert(outcomes).values([
+      { id: randomUUID(), marketId, label: "YES", currentPrice: yesPrice },
+      { id: randomUUID(), marketId, label: "NO", currentPrice: 1 - yesPrice },
+    ]);
+  }
+
+  // Create stock markets for clubs
+  const stocksData = [
+    { ticker: "ANIME", name: "Anime Club", category: "Clubs", price: 28, description: "Watch anime with friends and have snacks." },
+    { ticker: "ROBOT", name: "Menlo Robotics Club", category: "Clubs", price: 48, description: "Have fun while tinkering and learning about engineering." },
+    { ticker: "MUN", name: "Model UN", category: "Clubs", price: 44, description: "Exercise vital skills like public speaking and debate." },
+    { ticker: "DRAMA", name: "Drama Club", category: "Clubs", price: 36, description: "Act, create, and help bring Menlo shows to life." },
+    { ticker: "DEBAT", name: "Parliamentary Debate", category: "Clubs", price: 43, description: "Part of a debate team ranked top 20 in the country." },
+    { ticker: "TEDX", name: "TEDx Menlo", category: "Clubs", price: 45, description: "Be part of the production team for TEDx event." },
+    { ticker: "ENGR", name: "Engineering Club", category: "Clubs", price: 45, description: "Build an electric go-cart." },
+    { ticker: "GWC", name: "Girls Who Code", category: "Clubs", price: 38, description: "A fun place for girls who love STEM." },
+    { ticker: "BIZ", name: "Business & Entrepreneurship Club", category: "Clubs", price: 42, description: "Learn how to start a business." },
+    { ticker: "CLMT", name: "Climate Coalition", category: "Clubs", price: 38, description: "Focus on climate action and advocacy." },
+  ];
+
+  for (const s of stocksData) {
+    const marketId = randomUUID();
+    await db.insert(markets).values({
+      id: marketId,
+      type: "STOCK",
+      title: s.name,
+      description: s.description,
+      category: s.category,
+      status: "OPEN",
+      source: "INTERNAL",
+      closeAt: null,
+      resolveAt: null,
+      resolutionRule: null,
+      createdBy: adminId,
+    });
+
+    const priceVariation = s.price * (0.9 + Math.random() * 0.2);
+    await db.insert(stockMetaTable).values({
+      id: randomUUID(),
+      marketId,
+      ticker: s.ticker,
+      initialPrice: s.price,
+      currentPrice: priceVariation,
+      floatSupply: 10000,
+      virtualLiquidity: 100000,
+    });
+
+    // Generate 30 days of candle data
+    let currentPrice = s.price;
+    const now = new Date();
+    for (let i = 29; i >= 0; i--) {
+      const candleDate = new Date(now);
+      candleDate.setDate(candleDate.getDate() - i);
+      candleDate.setHours(9, 30, 0, 0);
+
+      const volatility = 0.08;
+      const changePercent = (Math.random() - 0.5) * volatility;
+      const open = currentPrice;
+      const close = currentPrice * (1 + changePercent);
+      const high = Math.max(open, close) * (1 + Math.random() * 0.03);
+      const low = Math.min(open, close) * (1 - Math.random() * 0.03);
+      const volume = Math.floor(100 + Math.random() * 900);
+
+      await db.insert(stockCandles).values({
+        id: randomUUID(),
+        marketId,
+        open,
+        high,
+        low,
+        close,
+        volume,
+        timestamp: candleDate,
+      });
+
+      currentPrice = close;
+    }
+  }
+
+  console.log("Database seeding complete!");
+}
+
+// Initialize database storage and seed if needed
+const dbStorage = new DbStorage();
+
+// Export database storage
+export const storage = dbStorage;
+
+// Call seeding function on startup
+seedDatabase().catch((err) => {
+  console.error("Failed to seed database:", err);
+});
