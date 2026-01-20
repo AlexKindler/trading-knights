@@ -12,6 +12,7 @@ Key features include:
 - Content moderation and admin controls
 - Leaderboard and portfolio tracking
 - Admin sports game management with auto-market creation
+- MK Parlay: Live sports betting using Polymarket data with TK play money
 
 ## User Preferences
 

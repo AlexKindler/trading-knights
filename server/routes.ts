@@ -723,6 +723,7 @@ export async function registerRoutes(
         description: `Prediction market for the ${sportName} game against ${game.opponent}. Resolves YES if Menlo wins, NO if Menlo loses or ties.`,
         category: "Sports",
         status: "OPEN",
+        source: "INTERNAL",
         closeAt: game.gameDate,
         resolveAt: new Date(new Date(game.gameDate).getTime() + 24 * 60 * 60 * 1000),
         resolutionRule: "Based on official game results",
@@ -920,20 +921,180 @@ export async function registerRoutes(
 
   app.get("/api/polymarket/sports", async (req, res) => {
     try {
-      const response = await fetch("https://gamma-api.polymarket.com/events?closed=false&limit=50");
+      // Fetch more events to find sports-related ones
+      const response = await fetch("https://gamma-api.polymarket.com/events?closed=false&limit=100&active=true");
       const events = await response.json();
       
-      const sportsKeywords = ["nba", "nfl", "mlb", "nhl", "soccer", "football", "basketball", "baseball", "hockey", "tennis", "golf", "ufc", "mma", "boxing", "olympics", "world cup", "super bowl", "championship", "playoffs", "finals"];
+      // Sports-specific slugs and keywords - more precise matching
+      const sportsSlugPatterns = [
+        "nba", "nfl", "mlb", "nhl", "mls", "premier-league", "la-liga", "bundesliga", "serie-a", "ligue-1",
+        "super-bowl", "world-series", "stanley-cup", "champions-league", "world-cup", "euro-", "copa-america",
+        "wimbledon", "us-open", "french-open", "australian-open", "masters", "pga", "f1-", "formula-1",
+        "nascar", "ufc", "boxing", "golf", "tennis", "soccer", "football-", "basketball", "baseball", "hockey"
+      ];
+      
+      // Keywords for title/description matching
+      const sportsKeywords = [
+        "nba", "nfl", "mlb", "nhl", "mls", "premier league", "la liga", "bundesliga", "serie a", "ligue 1",
+        "super bowl", "world series", "stanley cup", "champions league", "world cup", "wimbledon",
+        "us open", "french open", "australian open", "the masters", "pga tour", "lpga", "f1 ", "formula 1",
+        "nascar", "indy 500", "march madness", "ncaa", "college football", "mvp award", "heisman",
+        "ufc ", "boxing", "mma", "golf", "tennis", "soccer", "football game", "basketball", "baseball", "hockey"
+      ];
+      
+      // Exclude keywords to filter out false positives
+      const excludeKeywords = [
+        "president", "election", "trump", "biden", "political", "congress", "parliament",
+        "macron", "ukraine", "nato", "war", "tariff", "recession", "inflation", "fed ", "rates"
+      ];
       
       const sportsEvents = events.filter((event: any) => {
+        const slug = (event.slug || "").toLowerCase();
         const text = (event.title + " " + (event.description || "")).toLowerCase();
-        return sportsKeywords.some(keyword => text.includes(keyword));
+        
+        // Check if slug matches sports patterns
+        const slugMatch = sportsSlugPatterns.some(pattern => slug.includes(pattern));
+        
+        // Check if title/description matches sports keywords
+        const keywordMatch = sportsKeywords.some(keyword => text.includes(keyword));
+        
+        // Exclude political/economic events
+        const isExcluded = excludeKeywords.some(keyword => text.includes(keyword));
+        
+        return (slugMatch || keywordMatch) && !isExcluded;
       });
       
-      res.json(sportsEvents);
+      // Format events for display
+      const formattedEvents = sportsEvents.map((event: any) => ({
+        id: event.id,
+        slug: event.slug,
+        title: event.title,
+        description: event.description,
+        image: event.image || event.icon,
+        endDate: event.endDate,
+        volume: event.volume,
+        liquidity: event.liquidity,
+        markets: event.markets?.map((m: any) => ({
+          id: m.id,
+          question: m.question,
+          outcomePrices: m.outcomePrices,
+          outcomes: m.outcomes,
+        })) || [],
+      }));
+      
+      res.json(formattedEvents);
     } catch (error) {
       console.error("Polymarket fetch error:", error);
       res.status(500).json({ message: "Failed to fetch sports markets" });
+    }
+  });
+
+  // Auto-import or get existing polymarket market for betting
+  app.post("/api/polymarket/bet-on", requireAuth, requireVerified, async (req, res) => {
+    try {
+      const { eventId } = req.body;
+      
+      if (!eventId) {
+        return res.status(400).json({ message: "Missing event ID" });
+      }
+
+      // Check if already imported
+      const existingMarkets = await storage.getPolymarketMarkets();
+      const allLinks = await Promise.all(
+        existingMarkets.map(async (m) => {
+          const link = await storage.getPolymarketLink(m.id);
+          return { market: m, link };
+        })
+      );
+      const existing = allLinks.find(item => item.link?.polymarketEventId === eventId);
+      
+      if (existing) {
+        return res.json({ marketId: existing.market.id, isNew: false });
+      }
+
+      // Fetch event details from Polymarket to validate and get trusted data
+      const pmResponse = await fetch(`https://gamma-api.polymarket.com/events/${eventId}`);
+      if (!pmResponse.ok) {
+        return res.status(404).json({ message: "Event not found on Polymarket" });
+      }
+      const pmEvent = await pmResponse.json();
+      
+      if (!pmEvent || !pmEvent.title) {
+        return res.status(400).json({ message: "Invalid Polymarket event data" });
+      }
+
+      // Validate that this is a sports event using the same criteria as /api/polymarket/sports
+      const sportsSlugPatterns = [
+        "nba", "nfl", "mlb", "nhl", "mls", "premier-league", "la-liga", "bundesliga", "serie-a", "ligue-1",
+        "super-bowl", "world-series", "stanley-cup", "champions-league", "world-cup", "euro-", "copa-america",
+        "wimbledon", "us-open", "french-open", "australian-open", "masters", "pga", "f1-", "formula-1",
+        "nascar", "ufc", "boxing", "golf", "tennis", "soccer", "football-", "basketball", "baseball", "hockey"
+      ];
+      const sportsKeywords = [
+        "nba", "nfl", "mlb", "nhl", "mls", "premier league", "la liga", "bundesliga", "serie a", "ligue 1",
+        "super bowl", "world series", "stanley cup", "champions league", "world cup", "wimbledon",
+        "us open", "french open", "australian open", "the masters", "pga tour", "lpga", "f1 ", "formula 1",
+        "nascar", "indy 500", "march madness", "ncaa", "college football", "mvp award", "heisman",
+        "ufc ", "boxing", "mma", "golf", "tennis", "soccer", "football game", "basketball", "baseball", "hockey"
+      ];
+      const excludeKeywords = [
+        "president", "election", "trump", "biden", "political", "congress", "parliament",
+        "macron", "ukraine", "nato", "war", "tariff", "recession", "inflation", "fed ", "rates"
+      ];
+      
+      const eventSlug = (pmEvent.slug || "").toLowerCase();
+      const eventText = (pmEvent.title + " " + (pmEvent.description || "")).toLowerCase();
+      const slugMatch = sportsSlugPatterns.some(pattern => eventSlug.includes(pattern));
+      const keywordMatch = sportsKeywords.some(keyword => eventText.includes(keyword));
+      const isExcluded = excludeKeywords.some(keyword => eventText.includes(keyword));
+      
+      if (!(slugMatch || keywordMatch) || isExcluded) {
+        return res.status(400).json({ message: "This event is not a sports market" });
+      }
+
+      // Use verified data from Polymarket
+      const title = pmEvent.title;
+      const description = pmEvent.description || `Imported from Polymarket: ${title}`;
+      const slug = pmEvent.slug || eventId;
+      const image = pmEvent.image || pmEvent.icon || null;
+
+      // Auto-import the market
+      const market = await storage.createMarket({
+        type: "PREDICTION",
+        title,
+        description,
+        category: "Sports",
+        status: "OPEN",
+        source: "POLYMARKET",
+        closeAt: null,
+        resolveAt: null,
+        resolutionRule: "Based on Polymarket resolution",
+        createdBy: req.session.userId!,
+      });
+
+      await storage.createOutcome({
+        marketId: market.id,
+        label: "YES",
+        currentPrice: 0.5,
+      });
+
+      await storage.createOutcome({
+        marketId: market.id,
+        label: "NO",
+        currentPrice: 0.5,
+      });
+
+      await storage.createPolymarketLink({
+        marketId: market.id,
+        polymarketEventId: eventId,
+        polymarketSlug: slug,
+        polymarketImage: image || null,
+      });
+
+      res.json({ marketId: market.id, isNew: true });
+    } catch (error) {
+      console.error("Polymarket bet-on error:", error);
+      res.status(500).json({ message: "Failed to prepare market for betting" });
     }
   });
 
