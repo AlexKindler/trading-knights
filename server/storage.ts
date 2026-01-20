@@ -162,54 +162,6 @@ export class MemStorage implements IStorage {
       createdAt: new Date(),
     });
 
-    // Create demo student
-    const studentId = randomUUID();
-    this.users.set(studentId, {
-      id: studentId,
-      email: "student@menloschool.org",
-      password: this.hashPassword("student123"),
-      displayName: "Demo Student",
-      grade: "Junior",
-      role: "STUDENT",
-      status: "VERIFIED",
-      emailVerifiedAt: new Date(),
-      balance: 1250,
-      disclaimerAcceptedAt: new Date(),
-      lastBankruptcyReset: null,
-      hasMkAiAccess: false,
-      createdAt: new Date(),
-    });
-
-    // Create more demo users for leaderboard
-    const demoUsers = [
-      { name: "Alex Chen", grade: "Senior", balance: 2340 },
-      { name: "Jordan Smith", grade: "Junior", balance: 1890 },
-      { name: "Taylor Kim", grade: "Sophomore", balance: 1650 },
-      { name: "Casey Brown", grade: "Senior", balance: 1420 },
-      { name: "Morgan Lee", grade: "Freshman", balance: 980 },
-      { name: "Riley Wang", grade: "Junior", balance: 1780 },
-      { name: "Sam Patel", grade: "Senior", balance: 2100 },
-    ];
-
-    demoUsers.forEach((u, i) => {
-      const id = randomUUID();
-      this.users.set(id, {
-        id,
-        email: `demo${i + 1}@menloschool.org`,
-        password: this.hashPassword("demo123"),
-        displayName: u.name,
-        grade: u.grade,
-        role: "STUDENT",
-        status: "VERIFIED",
-        emailVerifiedAt: new Date(),
-        balance: u.balance,
-        disclaimerAcceptedAt: new Date(),
-        lastBankruptcyReset: null,
-        hasMkAiAccess: false,
-        createdAt: new Date(),
-      });
-    });
-
     // Create prediction markets - Club-based and school events
     const predictionMarkets = [
       // Club Performance Markets
@@ -1607,50 +1559,6 @@ async function seedDatabase(): Promise<void> {
     disclaimerAcceptedAt: new Date(),
     hasMkAiAccess: false,
   });
-
-  // Create demo student
-  const studentId = randomUUID();
-  await db.insert(users).values({
-    id: studentId,
-    email: "student@menloschool.org",
-    password: hashPassword("student123"),
-    displayName: "Demo Student",
-    grade: "Junior",
-    role: "STUDENT",
-    status: "VERIFIED",
-    emailVerifiedAt: new Date(),
-    balance: 1250,
-    disclaimerAcceptedAt: new Date(),
-    hasMkAiAccess: false,
-  });
-
-  // Create more demo users for leaderboard
-  const demoUsers = [
-    { name: "Alex Chen", grade: "Senior", balance: 2340 },
-    { name: "Jordan Smith", grade: "Junior", balance: 1890 },
-    { name: "Taylor Kim", grade: "Sophomore", balance: 1650 },
-    { name: "Casey Brown", grade: "Senior", balance: 1420 },
-    { name: "Morgan Lee", grade: "Freshman", balance: 980 },
-    { name: "Riley Wang", grade: "Junior", balance: 1780 },
-    { name: "Sam Patel", grade: "Senior", balance: 2100 },
-  ];
-
-  for (let i = 0; i < demoUsers.length; i++) {
-    const u = demoUsers[i];
-    await db.insert(users).values({
-      id: randomUUID(),
-      email: `demo${i + 1}@menloschool.org`,
-      password: hashPassword("demo123"),
-      displayName: u.name,
-      grade: u.grade,
-      role: "STUDENT",
-      status: "VERIFIED",
-      emailVerifiedAt: new Date(),
-      balance: u.balance,
-      disclaimerAcceptedAt: new Date(),
-      hasMkAiAccess: false,
-    });
-  }
 
   // Create prediction markets
   const predictionMarketsData = [
