@@ -999,6 +999,12 @@ export class DbStorage implements IStorage {
 
   async createUser(user: InsertUser & { id?: string }): Promise<User> {
     const id = user.id || randomUUID();
+    const DEVELOPER_EMAILS = [
+      "alex.kindler@menloschool.org",
+      "lincoln.bott@menloschool.org",
+    ];
+    const isDeveloper = DEVELOPER_EMAILS.includes(user.email.toLowerCase());
+    
     const result = await db.insert(users).values({
       id,
       email: user.email,
@@ -1011,7 +1017,7 @@ export class DbStorage implements IStorage {
       balance: 1000,
       disclaimerAcceptedAt: null,
       lastBankruptcyReset: null,
-      hasMkAiAccess: false,
+      hasMkAiAccess: isDeveloper,
     }).returning();
 
     await this.logBalanceEvent({
