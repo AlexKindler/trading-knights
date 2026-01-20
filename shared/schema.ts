@@ -210,6 +210,22 @@ export const games = pgTable("games", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// Stock simulation profiles for realistic price movements
+export const stockSimProfiles = pgTable("stock_sim_profiles", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  marketId: varchar("market_id").notNull().unique(),
+  patternType: text("pattern_type").notNull().default("RANDOM_WALK"),
+  baseVolatility: real("base_volatility").notNull().default(0.02),
+  drift: real("drift").notNull().default(0),
+  meanReversionSpeed: real("mean_reversion_speed").notNull().default(0.1),
+  longTermMean: real("long_term_mean").notNull(),
+  jumpFrequency: real("jump_frequency").notNull().default(0.05),
+  jumpMagnitude: real("jump_magnitude").notNull().default(0.1),
+  lastPrice: real("last_price").notNull(),
+  lastVolatility: real("last_volatility").notNull(),
+  lastUpdated: timestamp("last_updated").defaultNow().notNull(),
+});
+
 // Zod schemas
 export const insertUserSchema = createInsertSchema(users).pick({
   email: true,
@@ -291,6 +307,7 @@ export type StockCandle = typeof stockCandles.$inferSelect;
 export type MarketCandle = typeof marketCandles.$inferSelect;
 export type Game = typeof games.$inferSelect;
 export type PolymarketLink = typeof polymarketLinks.$inferSelect;
+export type StockSimProfile = typeof stockSimProfiles.$inferSelect;
 
 // Leaderboard types
 export interface LeaderboardEntry {

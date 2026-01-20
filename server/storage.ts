@@ -38,6 +38,8 @@ import { randomUUID } from "crypto";
 import { createHash } from "crypto";
 import { db } from "./db";
 import { eq, and, desc, sql, ne, isNull } from "drizzle-orm";
+import { generateHistoricalCandles, assignPatternType, startStockSimulation } from "./stockSimulator";
+import { stockSimProfiles } from "@shared/schema";
 
 export interface IStorage {
   // Users
@@ -1682,28 +1684,77 @@ async function seedDatabase(): Promise<void> {
     ]);
   }
 
-  // Create stock markets for clubs
+  // Create stock markets for all 56 clubs with different patterns
   const stocksData = [
-    { ticker: "ANIME", name: "Anime Club", category: "Clubs", price: 28, description: "Watch anime with friends and have snacks." },
-    { ticker: "ROBOT", name: "Menlo Robotics Club", category: "Clubs", price: 48, description: "Have fun while tinkering and learning about engineering." },
-    { ticker: "MUN", name: "Model UN", category: "Clubs", price: 44, description: "Exercise vital skills like public speaking and debate." },
-    { ticker: "DRAMA", name: "Drama Club", category: "Clubs", price: 36, description: "Act, create, and help bring Menlo shows to life." },
-    { ticker: "DEBAT", name: "Parliamentary Debate", category: "Clubs", price: 43, description: "Part of a debate team ranked top 20 in the country." },
-    { ticker: "TEDX", name: "TEDx Menlo", category: "Clubs", price: 45, description: "Be part of the production team for TEDx event." },
-    { ticker: "ENGR", name: "Engineering Club", category: "Clubs", price: 45, description: "Build an electric go-cart." },
-    { ticker: "GWC", name: "Girls Who Code", category: "Clubs", price: 38, description: "A fun place for girls who love STEM." },
-    { ticker: "BIZ", name: "Business & Entrepreneurship Club", category: "Clubs", price: 42, description: "Learn how to start a business." },
-    { ticker: "CLMT", name: "Climate Coalition", category: "Clubs", price: 38, description: "Focus on climate action and advocacy." },
+    { ticker: "ANIME", name: "Anime Club", price: 28, description: "Watch anime with friends and have snacks." },
+    { ticker: "ROBOT", name: "Menlo Robotics Club", price: 48, description: "Have fun while tinkering and learning about engineering." },
+    { ticker: "MUN", name: "Model UN", price: 44, description: "Exercise vital skills like public speaking and debate." },
+    { ticker: "DRAMA", name: "Drama Club", price: 36, description: "Act, create, and help bring Menlo shows to life." },
+    { ticker: "DEBAT", name: "Parliamentary Debate", price: 43, description: "Part of a debate team ranked top 20 in the country." },
+    { ticker: "TEDX", name: "TEDx Menlo", price: 45, description: "Be part of the production team for TEDx event." },
+    { ticker: "ENGR", name: "Engineering Club", price: 45, description: "Build an electric go-cart." },
+    { ticker: "GWC", name: "Girls Who Code", price: 38, description: "A fun place for girls who love STEM." },
+    { ticker: "BIZ", name: "Business & Entrepreneurship Club", price: 42, description: "Learn how to start a business." },
+    { ticker: "CLMT", name: "Climate Coalition", price: 38, description: "Focus on climate action and advocacy." },
+    { ticker: "ENVIR", name: "Environmental Action", price: 35, description: "Take action on environmental issues at school." },
+    { ticker: "SPCH", name: "Speech & Debate", price: 41, description: "Compete in public speaking and argumentation." },
+    { ticker: "MATH", name: "Math Club", price: 39, description: "Solve challenging problems and compete in math olympiads." },
+    { ticker: "CHEM", name: "Chemistry Club", price: 33, description: "Explore chemistry through experiments and competitions." },
+    { ticker: "PHYS", name: "Physics Club", price: 34, description: "Discover the laws of the universe through hands-on projects." },
+    { ticker: "BIO", name: "Biology Club", price: 32, description: "Study life sciences and environmental biology." },
+    { ticker: "ASTRO", name: "Astronomy Club", price: 29, description: "Observe the night sky and learn about space." },
+    { ticker: "CHESS", name: "Chess Club", price: 31, description: "Improve your strategic thinking through chess." },
+    { ticker: "MUSIC", name: "Music Production Club", price: 37, description: "Create and produce original music." },
+    { ticker: "PHOTO", name: "Photography Club", price: 30, description: "Capture moments and improve your photography skills." },
+    { ticker: "FILM", name: "Film Club", price: 40, description: "Make short films and explore cinematography." },
+    { ticker: "ART", name: "Art Club", price: 27, description: "Express yourself through various art mediums." },
+    { ticker: "WRITE", name: "Creative Writing Club", price: 26, description: "Write poetry, stories, and creative pieces." },
+    { ticker: "NEWS", name: "School Newspaper", price: 35, description: "Report on school events and student life." },
+    { ticker: "YRBK", name: "Yearbook", price: 34, description: "Document the school year in photos and memories." },
+    { ticker: "CULT", name: "Cultural Club", price: 33, description: "Celebrate diversity and cultural exchange." },
+    { ticker: "SPAN", name: "Spanish Club", price: 28, description: "Practice Spanish and explore Hispanic culture." },
+    { ticker: "FRNCH", name: "French Club", price: 27, description: "Learn French language and culture." },
+    { ticker: "CHINA", name: "Chinese Club", price: 31, description: "Explore Chinese language and traditions." },
+    { ticker: "KOREA", name: "Korean Club", price: 32, description: "Learn Korean language and K-culture." },
+    { ticker: "JSA", name: "Junior State of America", price: 42, description: "Engage in political debate and civic education." },
+    { ticker: "MOCK", name: "Mock Trial", price: 44, description: "Argue cases in simulated courtroom competitions." },
+    { ticker: "ECON", name: "Economics Club", price: 40, description: "Study markets and economic principles." },
+    { ticker: "INVEST", name: "Investment Club", price: 46, description: "Learn about stocks and portfolio management." },
+    { ticker: "CODE", name: "Coding Club", price: 47, description: "Learn programming and build software projects." },
+    { ticker: "CYBER", name: "Cybersecurity Club", price: 43, description: "Learn about digital security and ethical hacking." },
+    { ticker: "AI", name: "AI & Machine Learning", price: 50, description: "Explore artificial intelligence and ML projects." },
+    { ticker: "GAME", name: "Game Development Club", price: 38, description: "Design and create video games." },
+    { ticker: "ESPORT", name: "Esports Club", price: 35, description: "Compete in competitive gaming tournaments." },
+    { ticker: "COOK", name: "Cooking Club", price: 29, description: "Learn culinary skills and try new recipes." },
+    { ticker: "GARDEN", name: "Garden Club", price: 25, description: "Grow plants and maintain the school garden." },
+    { ticker: "YOGA", name: "Yoga & Wellness Club", price: 28, description: "Practice mindfulness and physical wellness." },
+    { ticker: "RUN", name: "Running Club", price: 26, description: "Train for races and enjoy group runs." },
+    { ticker: "HIKE", name: "Hiking Club", price: 27, description: "Explore local trails and nature." },
+    { ticker: "VOLUN", name: "Community Service", price: 36, description: "Give back through volunteer opportunities." },
+    { ticker: "TUTOR", name: "Peer Tutoring", price: 33, description: "Help fellow students succeed academically." },
+    { ticker: "LEAD", name: "Leadership Council", price: 41, description: "Develop leadership skills and plan events." },
+    { ticker: "STUCO", name: "Student Council", price: 45, description: "Represent student voice in school governance." },
+    { ticker: "SPIRIT", name: "Spirit Committee", price: 34, description: "Boost school spirit and plan pep rallies." },
+    { ticker: "DANCE", name: "Dance Team", price: 37, description: "Perform at games and school events." },
+    { ticker: "ACAP", name: "A Cappella", price: 39, description: "Sing in harmony without instruments." },
+    { ticker: "ORCH", name: "Orchestra", price: 38, description: "Play classical music in the school orchestra." },
+    { ticker: "BAND", name: "Jazz Band", price: 36, description: "Perform jazz and contemporary music." },
+    { ticker: "CHOIR", name: "Choir", price: 32, description: "Sing in the school's vocal ensemble." },
+    { ticker: "THTR", name: "Theater Tech", price: 30, description: "Build sets and run tech for productions." },
+    { ticker: "IMPROV", name: "Improv Comedy", price: 35, description: "Perform spontaneous comedy and sketches." },
   ];
 
-  for (const s of stocksData) {
+  const createdMarketIds: { marketId: string; price: number; index: number }[] = [];
+
+  for (let i = 0; i < stocksData.length; i++) {
+    const s = stocksData[i];
     const marketId = randomUUID();
     await db.insert(markets).values({
       id: marketId,
       type: "STOCK",
       title: s.name,
       description: s.description,
-      category: s.category,
+      category: "Clubs",
       status: "OPEN",
       source: "INTERNAL",
       closeAt: null,
@@ -1712,46 +1763,24 @@ async function seedDatabase(): Promise<void> {
       createdBy: adminId,
     });
 
-    const priceVariation = s.price * (0.9 + Math.random() * 0.2);
     await db.insert(stockMetaTable).values({
       id: randomUUID(),
       marketId,
       ticker: s.ticker,
       initialPrice: s.price,
-      currentPrice: priceVariation,
+      currentPrice: s.price,
       floatSupply: 10000,
       virtualLiquidity: 100000,
     });
 
-    // Generate 30 days of candle data
-    let currentPrice = s.price;
-    const now = new Date();
-    for (let i = 29; i >= 0; i--) {
-      const candleDate = new Date(now);
-      candleDate.setDate(candleDate.getDate() - i);
-      candleDate.setHours(9, 30, 0, 0);
+    createdMarketIds.push({ marketId, price: s.price, index: i });
+  }
 
-      const volatility = 0.08;
-      const changePercent = (Math.random() - 0.5) * volatility;
-      const open = currentPrice;
-      const close = currentPrice * (1 + changePercent);
-      const high = Math.max(open, close) * (1 + Math.random() * 0.03);
-      const low = Math.min(open, close) * (1 - Math.random() * 0.03);
-      const volume = Math.floor(100 + Math.random() * 900);
+  console.log(`Created ${createdMarketIds.length} stock markets, generating historical data...`);
 
-      await db.insert(stockCandles).values({
-        id: randomUUID(),
-        marketId,
-        open,
-        high,
-        low,
-        close,
-        volume,
-        timestamp: candleDate,
-      });
-
-      currentPrice = close;
-    }
+  for (const { marketId, price, index } of createdMarketIds) {
+    const patternType = assignPatternType(index);
+    await generateHistoricalCandles(marketId, price, patternType, 180);
   }
 
   console.log("Database seeding complete!");
@@ -1763,7 +1792,9 @@ const dbStorage = new DbStorage();
 // Export database storage
 export const storage = dbStorage;
 
-// Call seeding function on startup
-seedDatabase().catch((err) => {
+// Call seeding function on startup and always start simulation
+seedDatabase().then(() => {
+  startStockSimulation(5);
+}).catch((err) => {
   console.error("Failed to seed database:", err);
 });
