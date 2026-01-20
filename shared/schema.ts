@@ -346,3 +346,6 @@ export interface PositionWithDetails extends Position {
   currentValue: number;
   pnl: number;
 }
+
+// Re-export chat models for OpenAI integration
+export * from "./models/chat";
