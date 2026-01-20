@@ -37,7 +37,9 @@ Preferred communication style: Simple, everyday language.
 - **ORM**: Drizzle ORM with PostgreSQL dialect
 - **Schema Location**: `shared/schema.ts` (shared between client and server)
 - **Migrations**: Drizzle Kit with migrations output to `./migrations`
-- **Current Storage**: In-memory storage implementation in `server/storage.ts` (can be upgraded to PostgreSQL)
+- **Current Storage**: PostgreSQL database via DbStorage class in `server/storage.ts`
+- **Database Connection**: Configured in `server/db.ts` using DATABASE_URL environment variable
+- **Auto-seeding**: Database is automatically seeded on first startup with admin, demo users, stocks, and markets
 
 ### Key Design Patterns
 - **Monorepo Structure**: Client, server, and shared code in single repository
@@ -47,10 +49,14 @@ Preferred communication style: Simple, everyday language.
 
 ### Authentication Flow
 1. Registration with @menloschool.org email only
-2. Email verification token (hashed, 24hr expiry)
-3. Dev mode logs verification link to console if email not configured
-4. Verified users receive 1000 play dollars starting balance
-5. Bankruptcy reset to 100 if balance reaches 0 (24hr cooldown)
+2. All users are automatically verified upon registration (no email verification required)
+3. Users receive $1,000 play money starting balance immediately upon registration
+4. Bankruptcy reset to $100 if balance reaches 0 (24hr cooldown)
+
+### Developer Accounts
+- Developer emails are protected: alex.kindler@menloschool.org, lincoln.bott@menloschool.org
+- These accounts receive MK AI revenue split (50/50)
+- Once registered, these emails cannot be re-registered by anyone else
 
 ## External Dependencies
 
