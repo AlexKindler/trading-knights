@@ -1,5 +1,5 @@
-// SendGrid email integration for Trading Knights
-import sgMail from '@sendgrid/mail';
+// Resend email integration for Trading Knights
+import { Resend } from 'resend';
 
 let connectionSettings: any;
 
@@ -16,7 +16,7 @@ async function getCredentials() {
   }
 
   connectionSettings = await fetch(
-    'https://' + hostname + '/api/v2/connection?include_secrets=true&connector_names=sendgrid',
+    'https://' + hostname + '/api/v2/connection?include_secrets=true&connector_names=resend',
     {
       headers: {
         'Accept': 'application/json',
@@ -25,26 +25,35 @@ async function getCredentials() {
     }
   ).then(res => res.json()).then(data => data.items?.[0]);
 
-  if (!connectionSettings || (!connectionSettings.settings.api_key || !connectionSettings.settings.from_email)) {
-    throw new Error('SendGrid not connected');
+  if (!connectionSettings || !connectionSettings.settings.api_key) {
+    throw new Error('Resend not connected');
   }
-  return { apiKey: connectionSettings.settings.api_key, fromEmail: connectionSettings.settings.from_email };
+  if (!connectionSettings.settings.from_email) {
+    throw new Error('Resend from_email not configured');
+  }
+  return {
+    apiKey: connectionSettings.settings.api_key, 
+    fromEmail: connectionSettings.settings.from_email
+  };
 }
 
-// WARNING: Never cache this client.
-// Access tokens expire, so a new client must be created each time.
-export async function getUncachableSendGridClient() {
+async function getUncachableResendClient() {
   const { apiKey, fromEmail } = await getCredentials();
-  sgMail.setApiKey(apiKey);
   return {
-    client: sgMail,
+    client: new Resend(apiKey),
     fromEmail
   };
 }
 
 export async function sendVerificationEmail(toEmail: string, verificationToken: string): Promise<boolean> {
   try {
-    const { client, fromEmail } = await getUncachableSendGridClient();
+    console.log('Attempting to send verification email to:', toEmail);
+    console.log('REPLIT_CONNECTORS_HOSTNAME:', process.env.REPLIT_CONNECTORS_HOSTNAME ? 'SET' : 'NOT SET');
+    console.log('REPL_IDENTITY:', process.env.REPL_IDENTITY ? 'SET' : 'NOT SET');
+    console.log('WEB_REPL_RENEWAL:', process.env.WEB_REPL_RENEWAL ? 'SET' : 'NOT SET');
+    
+    const { client, fromEmail } = await getUncachableResendClient();
+    console.log('Resend client obtained, fromEmail:', fromEmail);
     
     const baseUrl = process.env.REPLIT_DEV_DOMAIN 
       ? `https://${process.env.REPLIT_DEV_DOMAIN}`
@@ -52,7 +61,7 @@ export async function sendVerificationEmail(toEmail: string, verificationToken: 
     
     const verificationLink = `${baseUrl}/verify-email?token=${verificationToken}`;
     
-    await client.send({
+    const result = await client.emails.send({
       from: fromEmail,
       to: toEmail,
       subject: 'Verify your Trading Knights account',
@@ -65,7 +74,7 @@ export async function sendVerificationEmail(toEmail: string, verificationToken: 
         </head>
         <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
           <div style="text-align: center; margin-bottom: 30px;">
-            <h1 style="color: #2563eb; margin: 0;">Trading Knights</h1>
+            <h1 style="color: #7c3aed; margin: 0;">Trading Knights</h1>
             <p style="color: #666; margin-top: 5px;">Menlo School Edition</p>
           </div>
           
@@ -74,11 +83,11 @@ export async function sendVerificationEmail(toEmail: string, verificationToken: 
             <p>Thank you for signing up. Please verify your email address to activate your account and receive your starting balance of $1,000 in play money.</p>
             
             <div style="text-align: center; margin: 30px 0;">
-              <a href="${verificationLink}" style="background: #2563eb; color: white; padding: 12px 30px; border-radius: 6px; text-decoration: none; font-weight: 600; display: inline-block;">Verify Email Address</a>
+              <a href="${verificationLink}" style="background: #7c3aed; color: white; padding: 12px 30px; border-radius: 6px; text-decoration: none; font-weight: 600; display: inline-block;">Verify Email Address</a>
             </div>
             
             <p style="font-size: 14px; color: #666;">If the button doesn't work, copy and paste this link into your browser:</p>
-            <p style="font-size: 12px; word-break: break-all; color: #2563eb;">${verificationLink}</p>
+            <p style="font-size: 12px; word-break: break-all; color: #7c3aed;">${verificationLink}</p>
           </div>
           
           <div style="text-align: center; font-size: 12px; color: #999;">
@@ -93,17 +102,20 @@ export async function sendVerificationEmail(toEmail: string, verificationToken: 
       `,
     });
 
-    console.log('Verification email sent successfully to:', toEmail);
+    console.log('Verification email sent successfully to:', toEmail, 'Result:', result);
     return true;
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error sending verification email:', error);
+    if (error.message) {
+      console.error('Error message:', error.message);
+    }
     return false;
   }
 }
 
 export async function sendPasswordResetEmail(toEmail: string, resetToken: string): Promise<boolean> {
   try {
-    const { client, fromEmail } = await getUncachableSendGridClient();
+    const { client, fromEmail } = await getUncachableResendClient();
     
     const baseUrl = process.env.REPLIT_DEV_DOMAIN 
       ? `https://${process.env.REPLIT_DEV_DOMAIN}`
@@ -111,7 +123,7 @@ export async function sendPasswordResetEmail(toEmail: string, resetToken: string
     
     const resetLink = `${baseUrl}/reset-password?token=${resetToken}`;
     
-    await client.send({
+    await client.emails.send({
       from: fromEmail,
       to: toEmail,
       subject: 'Reset your Trading Knights password',
@@ -122,9 +134,9 @@ export async function sendPasswordResetEmail(toEmail: string, resetToken: string
           <meta charset="utf-8">
         </head>
         <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto;">
-          <h1 style="color: #2563eb;">Trading Knights</h1>
+          <h1 style="color: #7c3aed;">Trading Knights</h1>
           <p>You requested a password reset. Click the link below to set a new password:</p>
-          <p><a href="${resetLink}" style="background: #2563eb; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; display: inline-block;">Reset Password</a></p>
+          <p><a href="${resetLink}" style="background: #7c3aed; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; display: inline-block;">Reset Password</a></p>
           <p style="font-size: 12px; color: #666;">This link expires in 1 hour. If you didn't request this, you can ignore this email.</p>
         </body>
         </html>
@@ -133,7 +145,7 @@ export async function sendPasswordResetEmail(toEmail: string, resetToken: string
 
     console.log('Password reset email sent successfully to:', toEmail);
     return true;
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error sending password reset email:', error);
     return false;
   }
