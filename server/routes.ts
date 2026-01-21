@@ -853,23 +853,25 @@ export async function registerRoutes(
 
   const MK_AI_PRICE = 10000;
 
+  const MK_AI_DEVELOPER_EMAILS = [
+    "alex.kindler@menloschool.org",
+    "lincoln.bott@menloschool.org",
+  ];
+
   app.get("/api/mk-ai/access", requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
-      res.json({ hasAccess: user.hasMkAiAccess ?? false });
+      // Developers always have free access
+      const isDeveloper = MK_AI_DEVELOPER_EMAILS.includes(user.email.toLowerCase());
+      res.json({ hasAccess: user.hasMkAiAccess || isDeveloper });
     } catch (error) {
       console.error("Get MK AI access error:", error);
       res.status(500).json({ message: "Failed to check access" });
     }
   });
-
-  const MK_AI_DEVELOPER_EMAILS = [
-    "alex.kindler@menloschool.org",
-    "lincoln.bott@menloschool.org",
-  ];
 
   app.post("/api/mk-ai/purchase", requireVerified, async (req, res) => {
     try {
@@ -929,7 +931,9 @@ export async function registerRoutes(
         return res.status(404).json({ message: "User not found" });
       }
 
-      if (!user.hasMkAiAccess) {
+      // Developers always have free access
+      const isDeveloper = MK_AI_DEVELOPER_EMAILS.includes(user.email.toLowerCase());
+      if (!user.hasMkAiAccess && !isDeveloper) {
         return res.status(403).json({ message: "MK AI access required" });
       }
 
