@@ -10,12 +10,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { TrendingUp, BarChart3, Wallet, Trophy, Menu, LogOut, User, Shield, Search, Sun, Moon, Brain } from "lucide-react";
+import { TrendingUp, BarChart3, Wallet, Trophy, Menu, LogOut, User, Shield, Search, Sun, Moon, Brain, Zap, Briefcase, Target } from "lucide-react";
 import { useState, useEffect } from "react";
 
 const navItems = [
-  { href: "/markets", label: "Trading", icon: TrendingUp },
-  { href: "/stocks", label: "Investments", icon: BarChart3 },
+  { href: "/trading", label: "Trading", icon: Zap },
+  { href: "/investments", label: "Investments", icon: Briefcase },
+  { href: "/markets", label: "Predictions", icon: Target },
   { href: "/mk-parlay", label: "MK Parlay", icon: Trophy },
   { href: "/portfolio", label: "Wallet", icon: Wallet },
   { href: "/leaderboard", label: "Leaderboard", icon: TrendingUp },

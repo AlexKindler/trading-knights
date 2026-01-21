@@ -11,6 +11,7 @@ import Markets from "@/pages/Markets";
 import MarketDetail from "@/pages/MarketDetail";
 import Stocks from "@/pages/Stocks";
 import StockDetail from "@/pages/StockDetail";
+import Trading from "@/pages/Trading";
 import Portfolio from "@/pages/Portfolio";
 import LeaderboardPage from "@/pages/LeaderboardPage";
 import MkAi from "@/pages/MkAi";
@@ -28,6 +29,8 @@ function Router() {
       <Route path="/" component={Home} />
       <Route path="/markets" component={Markets} />
       <Route path="/markets/:id" component={MarketDetail} />
+      <Route path="/trading" component={Trading} />
+      <Route path="/investments" component={Stocks} />
       <Route path="/stocks" component={Stocks} />
       <Route path="/stocks/:id" component={StockDetail} />
       <Route path="/portfolio" component={Portfolio} />
