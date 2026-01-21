@@ -924,7 +924,7 @@ export async function registerRoutes(
     }
   });
 
-  // MK AI Advisor - contextual stock/sports predictions
+  // MK AI Advisor - full trading assistant with function calling
   app.post("/api/mk-ai/advisor", requireVerified, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
@@ -943,11 +943,59 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Message required" });
       }
 
-      // Get context based on mode
-      let context = "";
-      
+      // Get user's portfolio for context
+      const positions = await storage.getPositionsByUser(user.id);
+      const trades = await storage.getTradesByUser(user.id);
+      const allStocks = await storage.getMarkets("STOCK");
+      const allPredictions = await storage.getMarkets("PREDICTION");
+
+      // Build comprehensive context
+      let context = `You are MK AI, the ultimate trading assistant for Trading Knights (a Menlo School prediction market with play money). You have FULL access to execute trades and manage the user's portfolio.
+
+USER PROFILE:
+- Name: ${user.displayName || user.email.split('@')[0]}
+- Balance: $${user.balance.toFixed(2)}
+- Account Status: ${user.status}
+
+USER'S CURRENT PORTFOLIO:`;
+
+      if (positions.length === 0) {
+        context += `\n- No positions yet (empty portfolio)`;
+      } else {
+        for (const pos of positions) {
+          const market = allStocks.find(s => s.id === pos.marketId) || allPredictions.find(p => p.id === pos.marketId);
+          if (market && pos.qty > 0) {
+            const currentPrice = market.type === "STOCK" ? market.stockMeta?.currentPrice || pos.avgCost : pos.avgCost;
+            const pnl = (currentPrice - pos.avgCost) * pos.qty;
+            const ticker = market.type === "STOCK" ? market.stockMeta?.ticker : market.title.slice(0, 10);
+            context += `\n- ${ticker}: ${pos.qty} shares @ $${pos.avgCost.toFixed(2)} avg (Current: $${currentPrice.toFixed(2)}, P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)})`;
+          }
+        }
+      }
+
+      context += `\n\nRECENT TRADES (last 10):`;
+      const recentTrades = trades.slice(-10).reverse();
+      if (recentTrades.length === 0) {
+        context += `\n- No trades yet`;
+      } else {
+        for (const trade of recentTrades) {
+          const market = allStocks.find(s => s.id === trade.marketId);
+          const ticker = market?.stockMeta?.ticker || "UNKNOWN";
+          context += `\n- ${trade.side} ${trade.qty}x ${ticker} @ $${trade.price.toFixed(2)}`;
+        }
+      }
+
+      context += `\n\nAVAILABLE STOCKS (${allStocks.length} total):`;
+      for (const stock of allStocks.slice(0, 56)) {
+        if (stock.stockMeta) {
+          const change = stock.stockMeta.currentPrice - stock.stockMeta.initialPrice;
+          const pctChange = ((change / stock.stockMeta.initialPrice) * 100).toFixed(1);
+          context += `\n- ${stock.stockMeta.ticker} (ID: ${stock.id}): $${stock.stockMeta.currentPrice.toFixed(2)} (${change >= 0 ? '+' : ''}${pctChange}%) - ${stock.title}`;
+        }
+      }
+
       if (mode === "sports") {
-        // Fetch sports markets from Polymarket for context
+        context += `\n\nSPORTS BETTING MODE: `;
         try {
           const polyResponse = await fetch("https://gamma-api.polymarket.com/events?closed=false&limit=50&active=true");
           const events = await polyResponse.json();
@@ -955,44 +1003,42 @@ export async function registerRoutes(
             const slug = (e.slug || "").toLowerCase();
             const text = (e.title + " " + (e.description || "")).toLowerCase();
             return ["nba", "nfl", "mlb", "nhl", "super-bowl", "champions-league", "world-cup", "tennis", "golf", "masters", "ufc"].some(k => slug.includes(k) || text.includes(k));
-          }).slice(0, 10);
+          }).slice(0, 15);
           
-          context = `You are MK AI, a sports betting advisor for Trading Knights (a Menlo School prediction market). Here are the current live sports markets from Polymarket:\n\n`;
+          context += `Current live sports markets from Polymarket:`;
           for (const event of sportsEvents) {
-            context += `- ${event.title} (Volume: $${(event.volume || 0).toLocaleString()})\n`;
+            context += `\n- ${event.title}`;
             if (event.markets?.[0]) {
               try {
                 const prices = JSON.parse(event.markets[0].outcomePrices || "[]");
-                context += `  YES: ${(parseFloat(prices[0]) * 100).toFixed(0)}%, NO: ${(parseFloat(prices[1]) * 100).toFixed(0)}%\n`;
+                context += ` (YES: ${(parseFloat(prices[0]) * 100).toFixed(0)}%, NO: ${(parseFloat(prices[1]) * 100).toFixed(0)}%)`;
               } catch {}
             }
           }
-          context += `\nGive betting advice based on odds and value. Be specific about which outcomes look favorable.`;
         } catch {
-          context = "You are MK AI, a sports betting advisor. Give general sports betting advice.";
+          context += "Unable to fetch live sports data.";
         }
-      } else {
-        // Stock mode - get all stocks for context
-        const allStocks = await storage.getMarkets("STOCK");
-        context = `You are MK AI, a stock trading advisor for Trading Knights (a Menlo School prediction market with fake money). Here are all the current stocks:\n\n`;
-        
-        for (const stock of allStocks.slice(0, 30)) {
-          if (stock.stockMeta) {
-            const change = stock.stockMeta.currentPrice - stock.stockMeta.initialPrice;
-            const pctChange = ((change / stock.stockMeta.initialPrice) * 100).toFixed(1);
-            context += `- ${stock.stockMeta.ticker}: $${stock.stockMeta.currentPrice.toFixed(2)} (${change >= 0 ? '+' : ''}${pctChange}%) - ${stock.title}\n`;
-          }
-        }
-
-        if (stockId) {
-          const currentStock = allStocks.find(s => s.id === stockId);
-          if (currentStock?.stockMeta) {
-            context += `\nThe user is currently viewing: ${currentStock.stockMeta.ticker} (${currentStock.title}) at $${currentStock.stockMeta.currentPrice.toFixed(2)}\n`;
-          }
-        }
-
-        context += `\nGive specific buy/sell recommendations with reasoning. Be confident and decisive.`;
       }
+
+      if (stockId) {
+        const currentStock = allStocks.find(s => s.id === stockId);
+        if (currentStock?.stockMeta) {
+          context += `\n\nCURRENTLY VIEWING: ${currentStock.stockMeta.ticker} (${currentStock.title}) at $${currentStock.stockMeta.currentPrice.toFixed(2)}`;
+        }
+      }
+
+      context += `
+
+CAPABILITIES:
+You can execute trades for the user by calling the buy_stock or sell_stock functions. When the user asks to buy or sell, USE the function - don't just describe it.
+
+TRADING RULES:
+- Minimum trade: 1 share, Maximum: 1000 shares per trade
+- User cannot spend more than their balance
+- User cannot sell more shares than they own
+- Always confirm the trade details before executing
+
+Be confident, give specific recommendations with reasoning. When appropriate, proactively suggest trades. You are the user's personal trading advisor and can take action on their behalf.`;
 
       // Set up SSE for streaming
       res.setHeader("Content-Type", "text/event-stream");
@@ -1005,20 +1051,194 @@ export async function registerRoutes(
         baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
       });
 
-      const stream = await openai.chat.completions.create({
+      // Define trading functions
+      const tools: any[] = [
+        {
+          type: "function",
+          function: {
+            name: "buy_stock",
+            description: "Buy shares of a stock for the user. Use this when the user wants to purchase shares.",
+            parameters: {
+              type: "object",
+              properties: {
+                marketId: { type: "string", description: "The market/stock ID to buy" },
+                ticker: { type: "string", description: "The stock ticker symbol for confirmation" },
+                quantity: { type: "number", description: "Number of shares to buy (1-1000)" },
+              },
+              required: ["marketId", "ticker", "quantity"],
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "sell_stock",
+            description: "Sell shares of a stock for the user. Use this when the user wants to sell shares they own.",
+            parameters: {
+              type: "object",
+              properties: {
+                marketId: { type: "string", description: "The market/stock ID to sell" },
+                ticker: { type: "string", description: "The stock ticker symbol for confirmation" },
+                quantity: { type: "number", description: "Number of shares to sell (1-1000)" },
+              },
+              required: ["marketId", "ticker", "quantity"],
+            },
+          },
+        },
+      ];
+
+      // First call - might include function calls
+      const response = await openai.chat.completions.create({
         model: "gpt-4.1-mini",
         messages: [
           { role: "system", content: context },
           { role: "user", content: message },
         ],
-        stream: true,
-        max_completion_tokens: 500,
+        tools,
+        tool_choice: "auto",
       });
 
-      for await (const chunk of stream) {
-        const content = chunk.choices[0]?.delta?.content || "";
-        if (content) {
-          res.write(`data: ${JSON.stringify({ content })}\n\n`);
+      const responseMessage = response.choices[0].message;
+      const toolCalls = responseMessage.tool_calls;
+
+      // Process function calls if any
+      if (toolCalls && toolCalls.length > 0) {
+        const functionResults: string[] = [];
+        
+        for (const toolCall of toolCalls) {
+          const tc = toolCall as any;
+          const functionName = tc.function?.name;
+          const args = JSON.parse(tc.function?.arguments || "{}");
+          
+          if (functionName === "buy_stock" || functionName === "sell_stock") {
+            const side = functionName === "buy_stock" ? "BUY" : "SELL";
+            const { marketId, ticker, quantity } = args;
+            
+            try {
+              const market = await storage.getMarket(marketId);
+              if (!market || market.status !== "OPEN" || !market.stockMeta) {
+                functionResults.push(`Failed to ${side.toLowerCase()} ${ticker}: Market not found or not available.`);
+                continue;
+              }
+
+              const currentPrice = market.stockMeta.currentPrice;
+              const total = quantity * currentPrice;
+
+              // Validate trade
+              if (side === "BUY" && user.balance < total) {
+                functionResults.push(`Failed to buy ${quantity} shares of ${ticker}: Insufficient balance. Need $${total.toFixed(2)} but have $${user.balance.toFixed(2)}.`);
+                continue;
+              }
+
+              if (side === "SELL") {
+                const position = await storage.getPosition(user.id, marketId);
+                if (!position || position.qty < quantity) {
+                  functionResults.push(`Failed to sell ${quantity} shares of ${ticker}: You only own ${position?.qty || 0} shares.`);
+                  continue;
+                }
+              }
+
+              // Execute trade
+              const trade = await storage.createTrade({
+                userId: user.id,
+                marketId,
+                outcomeId: null,
+                side,
+                qty: quantity,
+                price: currentPrice,
+                total,
+              });
+
+              // Update balance
+              const newBalance = side === "BUY" ? user.balance - total : user.balance + total;
+              await storage.updateUser(user.id, { balance: newBalance });
+              user.balance = newBalance; // Update local copy
+
+              // Log balance event
+              await storage.logBalanceEvent({
+                userId: user.id,
+                type: "TRADE",
+                amount: side === "BUY" ? -total : total,
+                note: `MK AI: ${side} ${quantity} shares of ${ticker} at $${currentPrice.toFixed(2)}`,
+              });
+
+              // Update position
+              const existingPosition = await storage.getPosition(user.id, marketId);
+              if (side === "BUY") {
+                if (existingPosition) {
+                  const newQty = existingPosition.qty + quantity;
+                  const newAvgCost = (existingPosition.qty * existingPosition.avgCost + quantity * currentPrice) / newQty;
+                  await storage.upsertPosition({
+                    userId: user.id,
+                    marketId,
+                    outcomeId: null,
+                    qty: newQty,
+                    avgCost: newAvgCost,
+                  });
+                } else {
+                  await storage.upsertPosition({
+                    userId: user.id,
+                    marketId,
+                    outcomeId: null,
+                    qty: quantity,
+                    avgCost: currentPrice,
+                  });
+                }
+              } else {
+                if (existingPosition) {
+                  const newQty = existingPosition.qty - quantity;
+                  await storage.upsertPosition({
+                    userId: user.id,
+                    marketId,
+                    outcomeId: null,
+                    qty: newQty,
+                    avgCost: existingPosition.avgCost,
+                  });
+                }
+              }
+
+              // Update stock price (simple AMM)
+              const priceChange = side === "BUY" ? currentPrice * 0.01 : -currentPrice * 0.01;
+              await storage.updateStockMeta(marketId, {
+                currentPrice: Math.max(0.01, currentPrice + priceChange),
+              });
+
+              functionResults.push(`Successfully ${side === "BUY" ? "bought" : "sold"} ${quantity} shares of ${ticker} at $${currentPrice.toFixed(2)} for $${total.toFixed(2)}. New balance: $${newBalance.toFixed(2)}`);
+            } catch (error: any) {
+              functionResults.push(`Trade error for ${ticker}: ${error.message}`);
+            }
+          }
+        }
+
+        // Stream the follow-up response with trade results
+        const followUpMessages: any[] = [
+          { role: "system", content: context },
+          { role: "user", content: message },
+          responseMessage,
+          ...toolCalls.map((tc, i) => ({
+            role: "tool" as const,
+            tool_call_id: tc.id,
+            content: functionResults[i] || "Trade processed",
+          })),
+        ];
+
+        const followUpStream = await openai.chat.completions.create({
+          model: "gpt-4.1-mini",
+          messages: followUpMessages,
+          stream: true,
+          max_completion_tokens: 500,
+        });
+
+        for await (const chunk of followUpStream) {
+          const content = chunk.choices[0]?.delta?.content || "";
+          if (content) {
+            res.write(`data: ${JSON.stringify({ content })}\n\n`);
+          }
+        }
+      } else {
+        // No function calls - just stream the response
+        if (responseMessage.content) {
+          res.write(`data: ${JSON.stringify({ content: responseMessage.content })}\n\n`);
         }
       }
 

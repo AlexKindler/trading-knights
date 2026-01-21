@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/context/AuthContext";
 import { useQuery } from "@tanstack/react-query";
+import { queryClient } from "@/lib/queryClient";
 import { Bot, Send, Loader2, Sparkles, Lock, TrendingUp, Trophy } from "lucide-react";
 import type { MarketWithDetails } from "@shared/schema";
 import { Link } from "wouter";
@@ -19,7 +20,7 @@ interface Message {
 }
 
 export function MkAiAdvisor({ currentStock, mode = "stock" }: MkAiAdvisorProps) {
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -105,6 +106,14 @@ export function MkAiAdvisor({ currentStock, mode = "stock" }: MkAiAdvisorProps) 
       ]);
     } finally {
       setIsLoading(false);
+      // Refresh data after AI completes (in case trades were executed)
+      queryClient.invalidateQueries({ queryKey: ["/api/portfolio"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/user"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/markets"] });
+      if (currentStock?.id) {
+        queryClient.invalidateQueries({ queryKey: ["/api/markets", currentStock.id] });
+      }
+      refreshUser();
     }
   };
 
@@ -116,14 +125,14 @@ export function MkAiAdvisor({ currentStock, mode = "stock" }: MkAiAdvisorProps) 
       ]
     : currentStock
     ? [
-        `Should I buy or sell ${currentStock.stockMeta?.ticker}?`,
-        `What's your prediction for ${currentStock.stockMeta?.ticker}?`,
-        "What stocks should I buy today?",
+        `Buy 10 shares of ${currentStock.stockMeta?.ticker}`,
+        `Analyze ${currentStock.stockMeta?.ticker} for me`,
+        "What's in my portfolio?",
       ]
     : [
-        "What stocks should I buy today?",
-        "Which clubs are trending up?",
-        "Give me your top 3 picks",
+        "Buy your top 3 stock picks for me",
+        "What's in my portfolio?",
+        "Invest $100 for me",
       ];
 
   if (!user) {
