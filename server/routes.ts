@@ -1,7 +1,8 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import session from "express-session";
-import MemoryStore from "memorystore";
+import pgSession from "connect-pg-simple";
+import { pool } from "./db";
 import { storage } from "./storage";
 import { insertUserSchema, loginSchema, insertTradeSchema, insertCommentSchema, insertReportSchema, insertGameSchema } from "@shared/schema";
 import { createHash } from "crypto";
@@ -14,7 +15,7 @@ declare module "express-session" {
   }
 }
 
-const SessionStore = MemoryStore(session);
+const PgStore = pgSession(session);
 
 function hashPassword(password: string): string {
   return createHash("sha256").update(password).digest("hex");
@@ -56,17 +57,19 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
-  // Session middleware
+  // Session middleware with PostgreSQL store for persistence across restarts
   app.use(
     session({
       secret: process.env.SESSION_SECRET || "campus-kalshi-secret-key",
       resave: false,
       saveUninitialized: false,
-      store: new SessionStore({
-        checkPeriod: 86400000,
+      store: new PgStore({
+        pool,
+        tableName: "session",
+        createTableIfMissing: true,
       }),
       cookie: {
-        secure: false,
+        secure: process.env.NODE_ENV === "production",
         httpOnly: true,
         maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
       },
