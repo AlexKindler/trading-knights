@@ -531,9 +531,10 @@ export async function registerRoutes(
       }
 
       res.json({ trade, newBalance });
-    } catch (error) {
+    } catch (error: any) {
       console.error("Trade error:", error);
-      res.status(500).json({ message: "Trade failed" });
+      console.error("Trade error stack:", error?.stack);
+      res.status(500).json({ message: error?.message || "Trade failed" });
     }
   });
 
