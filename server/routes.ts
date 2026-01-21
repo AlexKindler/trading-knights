@@ -920,6 +920,115 @@ export async function registerRoutes(
     }
   });
 
+  // MK AI Advisor - contextual stock/sports predictions
+  app.post("/api/mk-ai/advisor", requireVerified, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      if (!user.hasMkAiAccess) {
+        return res.status(403).json({ message: "MK AI access required" });
+      }
+
+      const { message, stockId, mode } = req.body;
+      if (!message) {
+        return res.status(400).json({ message: "Message required" });
+      }
+
+      // Get context based on mode
+      let context = "";
+      
+      if (mode === "sports") {
+        // Fetch sports markets from Polymarket for context
+        try {
+          const polyResponse = await fetch("https://gamma-api.polymarket.com/events?closed=false&limit=50&active=true");
+          const events = await polyResponse.json();
+          const sportsEvents = events.filter((e: any) => {
+            const slug = (e.slug || "").toLowerCase();
+            const text = (e.title + " " + (e.description || "")).toLowerCase();
+            return ["nba", "nfl", "mlb", "nhl", "super-bowl", "champions-league", "world-cup", "tennis", "golf", "masters", "ufc"].some(k => slug.includes(k) || text.includes(k));
+          }).slice(0, 10);
+          
+          context = `You are MK AI, a sports betting advisor for Trading Knights (a Menlo School prediction market). Here are the current live sports markets from Polymarket:\n\n`;
+          for (const event of sportsEvents) {
+            context += `- ${event.title} (Volume: $${(event.volume || 0).toLocaleString()})\n`;
+            if (event.markets?.[0]) {
+              try {
+                const prices = JSON.parse(event.markets[0].outcomePrices || "[]");
+                context += `  YES: ${(parseFloat(prices[0]) * 100).toFixed(0)}%, NO: ${(parseFloat(prices[1]) * 100).toFixed(0)}%\n`;
+              } catch {}
+            }
+          }
+          context += `\nGive betting advice based on odds and value. Be specific about which outcomes look favorable.`;
+        } catch {
+          context = "You are MK AI, a sports betting advisor. Give general sports betting advice.";
+        }
+      } else {
+        // Stock mode - get all stocks for context
+        const allStocks = await storage.getMarkets("STOCK");
+        context = `You are MK AI, a stock trading advisor for Trading Knights (a Menlo School prediction market with fake money). Here are all the current stocks:\n\n`;
+        
+        for (const stock of allStocks.slice(0, 30)) {
+          if (stock.stockMeta) {
+            const change = stock.stockMeta.currentPrice - stock.stockMeta.initialPrice;
+            const pctChange = ((change / stock.stockMeta.initialPrice) * 100).toFixed(1);
+            context += `- ${stock.stockMeta.ticker}: $${stock.stockMeta.currentPrice.toFixed(2)} (${change >= 0 ? '+' : ''}${pctChange}%) - ${stock.title}\n`;
+          }
+        }
+
+        if (stockId) {
+          const currentStock = allStocks.find(s => s.id === stockId);
+          if (currentStock?.stockMeta) {
+            context += `\nThe user is currently viewing: ${currentStock.stockMeta.ticker} (${currentStock.title}) at $${currentStock.stockMeta.currentPrice.toFixed(2)}\n`;
+          }
+        }
+
+        context += `\nGive specific buy/sell recommendations with reasoning. Be confident and decisive.`;
+      }
+
+      // Set up SSE for streaming
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+
+      const OpenAI = (await import("openai")).default;
+      const openai = new OpenAI({
+        apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+        baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+      });
+
+      const stream = await openai.chat.completions.create({
+        model: "gpt-4.1-mini",
+        messages: [
+          { role: "system", content: context },
+          { role: "user", content: message },
+        ],
+        stream: true,
+        max_completion_tokens: 500,
+      });
+
+      for await (const chunk of stream) {
+        const content = chunk.choices[0]?.delta?.content || "";
+        if (content) {
+          res.write(`data: ${JSON.stringify({ content })}\n\n`);
+        }
+      }
+
+      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+      res.end();
+    } catch (error) {
+      console.error("MK AI advisor error:", error);
+      if (!res.headersSent) {
+        res.status(500).json({ message: "Failed to get AI response" });
+      } else {
+        res.write(`data: ${JSON.stringify({ error: "Failed to get response" })}\n\n`);
+        res.end();
+      }
+    }
+  });
+
   // ==================== POLYMARKET ROUTES ====================
 
   app.get("/api/polymarket/sports", async (req, res) => {

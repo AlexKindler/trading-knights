@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { MkAiAdvisor } from "@/components/MkAiAdvisor";
 import { Trophy, ExternalLink, TrendingUp, TrendingDown, Loader2, DollarSign } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
@@ -263,6 +264,10 @@ export default function MkParlay() {
             })}
           </div>
         )}
+
+        <div className="mt-8 mx-auto max-w-md">
+          <MkAiAdvisor mode="sports" />
+        </div>
 
         <div className="mt-12 text-center">
           <p className="text-sm text-muted-foreground">

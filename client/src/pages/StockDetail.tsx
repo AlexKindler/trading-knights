@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TradingWidget } from "@/components/TradingWidget";
 import { CandlestickChart } from "@/components/CandlestickChart";
+import { MkAiAdvisor } from "@/components/MkAiAdvisor";
 import {
   ArrowLeft,
   BarChart3,
@@ -213,8 +214,9 @@ export default function StockDetail() {
             </Card>
           </div>
 
-          <div className="lg:sticky lg:top-20">
+          <div className="lg:sticky lg:top-20 space-y-4">
             <TradingWidget market={market} />
+            <MkAiAdvisor currentStock={market} mode="stock" />
           </div>
         </div>
       </div>
