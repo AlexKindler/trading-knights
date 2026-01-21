@@ -20,13 +20,16 @@ import type { MarketWithDetails } from "@shared/schema";
 export default function Trading() {
   const { user } = useAuth();
   const [search, setSearch] = useState("");
-  const [selectedStock, setSelectedStock] = useState<MarketWithDetails | null>(null);
+  const [selectedStockId, setSelectedStockId] = useState<string | null>(null);
   const [lastUpdate, setLastUpdate] = useState(new Date());
 
   const { data: stocks, isLoading, refetch } = useQuery<MarketWithDetails[]>({
     queryKey: ["/api/stocks"],
     refetchInterval: 5000,
   });
+
+  // Get selected stock from current stocks array to keep prices updated
+  const selectedStock = stocks?.find(s => s.id === selectedStockId) || null;
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -128,8 +131,9 @@ export default function Trading() {
                 <CardContent className="space-y-2">
                   {gainers?.map((stock) => (
                     <button
+                      type="button"
                       key={stock.id}
-                      onClick={() => setSelectedStock(stock)}
+                      onClick={() => setSelectedStockId(stock.id)}
                       className={`w-full flex items-center justify-between p-2 rounded-md hover-elevate text-left ${
                         selectedStock?.id === stock.id ? "bg-primary/10 border border-primary" : "bg-background"
                       }`}
@@ -158,8 +162,9 @@ export default function Trading() {
                 <CardContent className="space-y-2">
                   {losers?.map((stock) => (
                     <button
+                      type="button"
                       key={stock.id}
-                      onClick={() => setSelectedStock(stock)}
+                      onClick={() => setSelectedStockId(stock.id)}
                       className={`w-full flex items-center justify-between p-2 rounded-md hover-elevate text-left ${
                         selectedStock?.id === stock.id ? "bg-primary/10 border border-primary" : "bg-background"
                       }`}
@@ -198,8 +203,9 @@ export default function Trading() {
                       const isPositive = change >= 0;
                       return (
                         <button
+                          type="button"
                           key={stock.id}
-                          onClick={() => setSelectedStock(stock)}
+                          onClick={() => setSelectedStockId(stock.id)}
                           className={`p-3 rounded-lg border hover-elevate text-left transition-all ${
                             selectedStock?.id === stock.id 
                               ? "border-primary bg-primary/5 ring-1 ring-primary" 
