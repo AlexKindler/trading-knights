@@ -5,11 +5,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/context/AuthContext";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, ArrowUpRight, ArrowDownRight, Wallet } from "lucide-react";
-import type { MarketWithDetails } from "@shared/schema";
+import { Loader2, ArrowUpRight, ArrowDownRight, Wallet, Package } from "lucide-react";
+import type { MarketWithDetails, Position } from "@shared/schema";
 
 interface TradingWidgetProps {
   market: MarketWithDetails;
@@ -22,6 +22,18 @@ export function TradingWidget({ market, selectedOutcomeId, onOutcomeSelect }: Tr
   const { toast } = useToast();
   const [side, setSide] = useState<"BUY" | "SELL">("BUY");
   const [quantity, setQuantity] = useState("");
+
+  // Fetch user's portfolio to get owned shares
+  const { data: portfolio } = useQuery<{ positions: Position[] }>({
+    queryKey: ["/api/portfolio"],
+    enabled: !!user,
+  });
+
+  // Find owned shares for this market
+  const ownedPosition = portfolio?.positions?.find(
+    (p) => p.marketId === market.id && (market.type === "STOCK" || p.outcomeId === selectedOutcomeId)
+  );
+  const ownedShares = ownedPosition?.qty ?? 0;
 
   const isPredictionMarket = market.type === "PREDICTION";
   const selectedOutcome = market.outcomes?.find((o) => o.id === selectedOutcomeId);
@@ -68,11 +80,19 @@ export function TradingWidget({ market, selectedOutcomeId, onOutcomeSelect }: Tr
 
   const handleMaxClick = () => {
     if (!user) return;
-    const maxQty = Math.floor(user.balance / currentPrice);
-    setQuantity(Math.min(maxQty, 1000).toString());
+    if (side === "BUY") {
+      const maxQty = Math.floor(user.balance / currentPrice);
+      setQuantity(Math.min(maxQty, 1000).toString());
+    } else {
+      // For selling, max is owned shares
+      setQuantity(Math.min(ownedShares, 1000).toString());
+    }
   };
 
-  const canTrade = user?.status === "VERIFIED" && qty > 0 && total <= (user?.balance ?? 0);
+  // Validate trade conditions
+  const canBuy = user?.status === "VERIFIED" && qty > 0 && total <= (user?.balance ?? 0);
+  const canSell = user?.status === "VERIFIED" && qty > 0 && qty <= ownedShares;
+  const canTrade = side === "BUY" ? canBuy : canSell;
 
   if (market.status !== "OPEN") {
     return (
@@ -175,11 +195,21 @@ export function TradingWidget({ market, selectedOutcomeId, onOutcomeSelect }: Tr
         </div>
 
         {user && (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Wallet className="h-4 w-4" />
-            <span>
-              Balance: <span className="font-mono font-medium">${user.balance.toFixed(2)}</span>
-            </span>
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Wallet className="h-4 w-4" />
+              <span>
+                Balance: <span className="font-mono font-medium">${user.balance.toFixed(2)}</span>
+              </span>
+            </div>
+            {ownedShares > 0 && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Package className="h-4 w-4" />
+                <span>
+                  Owned: <span className="font-mono font-medium">{ownedShares} shares</span>
+                </span>
+              </div>
+            )}
           </div>
         )}
 

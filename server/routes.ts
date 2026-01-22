@@ -421,7 +421,7 @@ export async function registerRoutes(
 
       // Check position for sell
       if (side === "SELL") {
-        const position = await storage.getPosition(user.id, marketId, outcomeId);
+        const position = await storage.getPosition(user.id, marketId, outcomeId ?? undefined);
         if (!position || position.qty < qty) {
           return res.status(400).json({ message: "Insufficient shares" });
         }
@@ -452,7 +452,7 @@ export async function registerRoutes(
       });
 
       // Update position
-      const existingPosition = await storage.getPosition(user.id, marketId, outcomeId);
+      const existingPosition = await storage.getPosition(user.id, marketId, outcomeId ?? undefined);
       if (side === "BUY") {
         if (existingPosition) {
           const newQty = existingPosition.qty + qty;
