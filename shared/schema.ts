@@ -267,9 +267,9 @@ export const insertStockSchema = z.object({
 
 export const insertTradeSchema = z.object({
   marketId: z.string(),
-  outcomeId: z.string().optional(),
+  outcomeId: z.string().optional().nullable(),
   side: z.enum(["BUY", "SELL"]),
-  qty: z.number().int().min(1).max(1000),
+  qty: z.coerce.number().int().min(1).max(1000),
 });
 
 export const insertCommentSchema = z.object({
