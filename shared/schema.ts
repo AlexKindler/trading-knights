@@ -26,7 +26,7 @@ export const users = pgTable("users", {
   role: text("role").notNull().default("STUDENT"),
   status: text("status").notNull().default("PENDING_VERIFICATION"),
   emailVerifiedAt: timestamp("email_verified_at"),
-  balance: integer("balance").notNull().default(0),
+  balance: real("balance").notNull().default(0),
   disclaimerAcceptedAt: timestamp("disclaimer_accepted_at"),
   lastBankruptcyReset: timestamp("last_bankruptcy_reset"),
   hasMkAiAccess: boolean("has_mk_ai_access").notNull().default(false),
@@ -190,7 +190,7 @@ export const balanceEvents = pgTable("balance_events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull(),
   type: text("type").notNull(),
-  amount: integer("amount").notNull(),
+  amount: real("amount").notNull(),
   note: text("note"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
