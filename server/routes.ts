@@ -1112,7 +1112,8 @@ Be confident, give specific recommendations with reasoning. When appropriate, pr
           
           if (functionName === "buy_stock" || functionName === "sell_stock") {
             const side = functionName === "buy_stock" ? "BUY" : "SELL";
-            const { marketId, ticker, quantity } = args;
+            const { marketId, ticker } = args;
+            const quantity = Math.floor(Number(args.quantity) || 0);
             
             try {
               const market = await storage.getMarket(marketId);
