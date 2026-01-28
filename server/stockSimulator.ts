@@ -165,23 +165,43 @@ export async function generateHistoricalCandles(marketId: string, initialPrice: 
   }
 }
 
+const VIBE_MARKET_ID = "200aaca8-b63f-416f-b2f1-d8dfc92cdb71";
+
 export async function updateStockPrices(): Promise<void> {
   const profiles = await db.select().from(stockSimProfiles);
   
+  const allStocks = await db.select().from(stockMeta);
+  const highestNonVibePrice = Math.max(
+    ...allStocks.filter(s => s.marketId !== VIBE_MARKET_ID).map(s => s.currentPrice)
+  );
+  
   for (const profile of profiles) {
+    const isVibe = profile.marketId === VIBE_MARKET_ID;
+    
     const params: SimulationParams = {
       patternType: profile.patternType as PatternType,
-      baseVolatility: profile.baseVolatility,
-      drift: profile.drift,
+      baseVolatility: isVibe ? 0.015 : profile.baseVolatility,
+      drift: isVibe ? 0.006 : profile.drift,
       meanReversionSpeed: profile.meanReversionSpeed,
       longTermMean: profile.longTermMean,
-      jumpFrequency: profile.jumpFrequency,
-      jumpMagnitude: profile.jumpMagnitude,
+      jumpFrequency: isVibe ? 0.04 : profile.jumpFrequency,
+      jumpMagnitude: isVibe ? 0.15 : profile.jumpMagnitude,
     };
 
     const now = new Date();
     const dayOfYear = Math.floor((now.getTime() - new Date(now.getFullYear(), 0, 0).getTime()) / (24 * 60 * 60 * 1000));
-    const { price: newPrice, volatility: newVolatility } = simulateNextPrice(profile.lastPrice, profile.lastVolatility, params, dayOfYear);
+    let { price: newPrice, volatility: newVolatility } = simulateNextPrice(profile.lastPrice, profile.lastVolatility, params, dayOfYear);
+    
+    if (isVibe) {
+      const minVibePrice = highestNonVibePrice * 1.5;
+      if (newPrice < minVibePrice) {
+        newPrice = minVibePrice + (Math.random() * 10);
+      }
+      if (Math.random() < 0.3) {
+        newPrice *= 1 + (Math.random() * 0.02);
+      }
+      newPrice = Math.round(newPrice * 100) / 100;
+    }
 
     await db.update(stockSimProfiles).set({
       lastPrice: newPrice,
