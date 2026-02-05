@@ -12,3 +12,5 @@ vite.config.ts.*
 replit.md
 Procfile
 railway.json
+.vercel
+.env*.local
