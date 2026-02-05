@@ -1,4 +1,5 @@
 // Vercel Serverless Function wrapper for Express app
-const app = require('../dist/index.cjs');
+const path = require('path');
+const app = require(path.join(__dirname, '..', 'dist', 'index.cjs'));
 
 module.exports = app.default || app;
