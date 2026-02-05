@@ -6,8 +6,7 @@ import { createServer } from "http";
 const app = express();
 const httpServer = createServer(app);
 
-// Trust proxy for secure cookies behind reverse proxy (Replit deployments)
-// Must be enabled in all environments since Replit uses reverse proxies
+// Trust proxy for secure cookies behind reverse proxy
 app.set("trust proxy", 1);
 
 declare module "http" {
@@ -63,7 +62,9 @@ app.use((req, res, next) => {
   next();
 });
 
-(async () => {
+// Initialize routes
+let initialized = false;
+const initPromise = (async () => {
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
@@ -74,29 +75,33 @@ app.use((req, res, next) => {
     throw err;
   });
 
-  // importantly only setup vite in development and after
-  // setting up all the other routes so the catch-all route
-  // doesn't interfere with the other routes
-  if (process.env.NODE_ENV === "production") {
+  // Only serve static files in production (non-Vercel) or local dev
+  if (process.env.NODE_ENV === "production" && !process.env.VERCEL) {
     serveStatic(app);
-  } else {
+  } else if (process.env.NODE_ENV !== "production") {
     const { setupVite } = await import("./vite");
     await setupVite(httpServer, app);
   }
 
-  // ALWAYS serve the app on the port specified in the environment variable PORT
-  // Other ports are firewalled. Default to 5000 if not specified.
-  // this serves both the API and the client.
-  // It is the only port that is not firewalled.
-  const port = parseInt(process.env.PORT || "5000", 10);
-  httpServer.listen(
-    {
-      port,
-      host: "0.0.0.0",
-      reusePort: true,
-    },
-    () => {
-      log(`serving on port ${port}`);
-    },
-  );
+  initialized = true;
 })();
+
+// Only start the server if not running on Vercel
+if (!process.env.VERCEL) {
+  initPromise.then(() => {
+    const port = parseInt(process.env.PORT || "5000", 10);
+    httpServer.listen(
+      {
+        port,
+        host: "0.0.0.0",
+        reusePort: true,
+      },
+      () => {
+        log(`serving on port ${port}`);
+      },
+    );
+  });
+}
+
+// Export for Vercel serverless
+export default app;
