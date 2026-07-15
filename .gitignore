@@ -14,3 +14,6 @@ Procfile
 railway.json
 .vercel
 .env*.local
+
+# ruflo/claude-flow tooling state (not part of the app)
+.claude-flow/

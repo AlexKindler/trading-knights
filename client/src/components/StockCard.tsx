@@ -92,11 +92,11 @@ export function StockCard({ market }: StockCardProps) {
         </div>
 
         <div className="mt-3 h-8 rounded bg-muted/50">
+          {/* Deterministic trend line from initial price (left) to current
+              price (right). No per-render randomness. */}
           <svg className="h-full w-full" viewBox="0 0 100 32" preserveAspectRatio="none">
             <path
-              d={`M 0 ${20 - Math.random() * 10} ${Array.from({ length: 10 }, (_, i) =>
-                `L ${(i + 1) * 10} ${20 - Math.random() * 15 + Math.random() * 10}`
-              ).join(" ")}`}
+              d={`M 0 ${isPositive ? 26 : isNegative ? 6 : 16} L 100 ${isPositive ? 6 : isNegative ? 26 : 16}`}
               fill="none"
               stroke={isPositive ? "#22c55e" : isNegative ? "#ef4444" : "#6b7280"}
               strokeWidth="1.5"

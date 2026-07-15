@@ -1,51 +1,18 @@
 import { db } from "./db";
-import { markets, outcomes, stockMeta, stockCandles, marketCandles, users } from "@shared/schema";
+import { markets, outcomes, stockMeta, marketCandles } from "@shared/schema";
 import { randomUUID } from "crypto";
-import { createHash } from "crypto";
 import { eq } from "drizzle-orm";
+import { generateHistoricalCandles, assignPatternType } from "./stockSimulator";
 
-function hashPassword(password: string): string {
-  return createHash("sha256").update(password).digest("hex");
-}
+// Placeholder creator id for seeded markets. This seeder creates NO accounts and
+// NO passwords — admin access is granted only at registration (routes.ts) for
+// emails in DEVELOPER_EMAILS. This is a stable, non-secret UUID.
+const SYSTEM_CREATOR_ID = "00000000-0000-0000-0000-000000000001";
 
 async function seed() {
   console.log("Starting database seed...");
 
-  // Check if already seeded by looking for stocks
-  const existingStocks = await db.select().from(markets).where(eq(markets.type, "STOCK")).limit(1);
-  if (existingStocks.length > 0) {
-    console.log("Database already has stocks. Checking if we need to add more...");
-    const allStocks = await db.select().from(markets).where(eq(markets.type, "STOCK"));
-    console.log(`Found ${allStocks.length} existing stocks`);
-    if (allStocks.length >= 50) {
-      console.log("Database already seeded with clubs. Skipping...");
-      return;
-    }
-  }
-
-  // Create or get admin user
-  let adminId: string;
-  const existingAdmin = await db.select().from(users).where(eq(users.email, "admin@menloschool.org")).limit(1);
-
-  if (existingAdmin.length > 0) {
-    adminId = existingAdmin[0].id;
-    console.log("Using existing admin user");
-  } else {
-    adminId = randomUUID();
-    await db.insert(users).values({
-      id: adminId,
-      email: "admin@menloschool.org",
-      password: hashPassword("admin123"),
-      displayName: "Admin",
-      grade: "Faculty",
-      role: "ADMIN",
-      status: "VERIFIED",
-      emailVerifiedAt: new Date(),
-      balance: 10000,
-      disclaimerAcceptedAt: new Date(),
-    });
-    console.log("Created admin user");
-  }
+  const adminId = SYSTEM_CREATOR_ID;
 
   // All Menlo School Clubs - comprehensive list
   const clubs = [
@@ -146,8 +113,9 @@ async function seed() {
 
   console.log(`Seeding ${clubs.length} clubs...`);
 
-  for (const club of clubs) {
-    // Check if this stock already exists
+  for (let ci = 0; ci < clubs.length; ci++) {
+    const club = clubs[ci];
+    // Check if this stock already exists (idempotent).
     const existing = await db.select().from(stockMeta).where(eq(stockMeta.ticker, club.ticker)).limit(1);
     if (existing.length > 0) {
       console.log(`Skipping ${club.ticker} - already exists`);
@@ -181,36 +149,10 @@ async function seed() {
       virtualLiquidity: 100000,
     });
 
-    // Generate historical candle data (90 days)
-    const now = new Date();
-    let currentPrice = club.price;
-
-    for (let i = 89; i >= 0; i--) {
-      const candleDate = new Date(now);
-      candleDate.setDate(candleDate.getDate() - i);
-      candleDate.setHours(9, 30, 0, 0);
-
-      const volatility = 0.06;
-      const changePercent = (Math.random() - 0.5) * volatility;
-      const open = currentPrice;
-      const close = Math.max(5, currentPrice * (1 + changePercent));
-      const high = Math.max(open, close) * (1 + Math.random() * 0.02);
-      const low = Math.min(open, close) * (1 - Math.random() * 0.02);
-      const volume = Math.floor(50 + Math.random() * 500);
-
-      await db.insert(stockCandles).values({
-        id: randomUUID(),
-        marketId,
-        open,
-        high,
-        low,
-        close,
-        volume,
-        timestamp: candleDate,
-      });
-
-      currentPrice = close;
-    }
+    // Generate historical candles AND the stock_sim_profiles row via the
+    // simulator so every seeded stock actually moves. This is idempotent: it
+    // no-ops if candles/profile already exist for this market.
+    await generateHistoricalCandles(marketId, club.price, assignPatternType(ci), 180);
 
     console.log(`Created ${club.ticker} - ${club.name}`);
   }

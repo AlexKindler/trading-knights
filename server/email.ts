@@ -1,70 +1,46 @@
-// Resend email integration for Trading Knights
-import { Resend } from 'resend';
+// Resend email integration for Trading Knights (CONTRACT §6)
+// Uses the 'resend' package directly with env config. If RESEND_API_KEY is
+// unset we log a warning and return false — never throw/crash. Callers already
+// tolerate a false return value.
+import { Resend } from "resend";
 
-let connectionSettings: any;
-
-async function getCredentials() {
-  const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
-  const xReplitToken = process.env.REPL_IDENTITY 
-    ? 'repl ' + process.env.REPL_IDENTITY 
-    : process.env.WEB_REPL_RENEWAL 
-    ? 'depl ' + process.env.WEB_REPL_RENEWAL 
-    : null;
-
-  if (!xReplitToken) {
-    throw new Error('X_REPLIT_TOKEN not found for repl/depl');
-  }
-
-  connectionSettings = await fetch(
-    'https://' + hostname + '/api/v2/connection?include_secrets=true&connector_names=resend',
-    {
-      headers: {
-        'Accept': 'application/json',
-        'X_REPLIT_TOKEN': xReplitToken
-      }
-    }
-  ).then(res => res.json()).then(data => data.items?.[0]);
-
-  if (!connectionSettings || !connectionSettings.settings.api_key) {
-    throw new Error('Resend not connected');
-  }
-  if (!connectionSettings.settings.from_email) {
-    throw new Error('Resend from_email not configured');
-  }
-  return {
-    apiKey: connectionSettings.settings.api_key, 
-    fromEmail: connectionSettings.settings.from_email
-  };
+function getFromEmail(): string {
+  return process.env.EMAIL_FROM || "Trading Knights <onboarding@resend.dev>";
 }
 
-async function getUncachableResendClient() {
-  const { apiKey, fromEmail } = await getCredentials();
-  return {
-    client: new Resend(apiKey),
-    fromEmail
-  };
+function getBaseUrl(): string {
+  return (
+    process.env.APP_BASE_URL ||
+    process.env.PUBLIC_BASE_URL ||
+    `http://localhost:${process.env.PORT || "5000"}`
+  );
 }
 
-export async function sendVerificationEmail(toEmail: string, verificationToken: string): Promise<boolean> {
+function getClient(): Resend | null {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
+    console.warn(
+      "[email] RESEND_API_KEY is not set — skipping email send. Set RESEND_API_KEY to enable outbound email.",
+    );
+    return null;
+  }
+  return new Resend(apiKey);
+}
+
+export async function sendVerificationEmail(
+  toEmail: string,
+  verificationToken: string,
+): Promise<boolean> {
+  const client = getClient();
+  if (!client) return false;
+
   try {
-    console.log('Attempting to send verification email to:', toEmail);
-    console.log('REPLIT_CONNECTORS_HOSTNAME:', process.env.REPLIT_CONNECTORS_HOSTNAME ? 'SET' : 'NOT SET');
-    console.log('REPL_IDENTITY:', process.env.REPL_IDENTITY ? 'SET' : 'NOT SET');
-    console.log('WEB_REPL_RENEWAL:', process.env.WEB_REPL_RENEWAL ? 'SET' : 'NOT SET');
-    
-    const { client, fromEmail } = await getUncachableResendClient();
-    console.log('Resend client obtained, fromEmail:', fromEmail);
-    
-    const baseUrl = process.env.REPLIT_DEV_DOMAIN 
-      ? `https://${process.env.REPLIT_DEV_DOMAIN}`
-      : 'http://localhost:5000';
-    
-    const verificationLink = `${baseUrl}/verify-email?token=${verificationToken}`;
-    
-    const result = await client.emails.send({
-      from: fromEmail,
+    const verificationLink = `${getBaseUrl()}/verify-email?token=${verificationToken}`;
+
+    await client.emails.send({
+      from: getFromEmail(),
       to: toEmail,
-      subject: 'Verify your Trading Knights account',
+      subject: "Verify your Trading Knights account",
       html: `
         <!DOCTYPE html>
         <html>
@@ -77,19 +53,19 @@ export async function sendVerificationEmail(toEmail: string, verificationToken: 
             <h1 style="color: #7c3aed; margin: 0;">Trading Knights</h1>
             <p style="color: #666; margin-top: 5px;">Menlo School Edition</p>
           </div>
-          
+
           <div style="background: #f8fafc; border-radius: 8px; padding: 30px; margin-bottom: 20px;">
             <h2 style="margin-top: 0;">Welcome to Trading Knights!</h2>
             <p>Thank you for signing up. Please verify your email address to activate your account and receive your starting balance of $1,000 in play money.</p>
-            
+
             <div style="text-align: center; margin: 30px 0;">
               <a href="${verificationLink}" style="background: #7c3aed; color: white; padding: 12px 30px; border-radius: 6px; text-decoration: none; font-weight: 600; display: inline-block;">Verify Email Address</a>
             </div>
-            
+
             <p style="font-size: 14px; color: #666;">If the button doesn't work, copy and paste this link into your browser:</p>
             <p style="font-size: 12px; word-break: break-all; color: #7c3aed;">${verificationLink}</p>
           </div>
-          
+
           <div style="text-align: center; font-size: 12px; color: #999;">
             <p>This link expires in 24 hours.</p>
             <p style="margin-top: 20px;">
@@ -102,31 +78,27 @@ export async function sendVerificationEmail(toEmail: string, verificationToken: 
       `,
     });
 
-    console.log('Verification email sent successfully to:', toEmail, 'Result:', result);
     return true;
   } catch (error: any) {
-    console.error('Error sending verification email:', error);
-    if (error.message) {
-      console.error('Error message:', error.message);
-    }
+    console.error("[email] Error sending verification email:", error?.message || error);
     return false;
   }
 }
 
-export async function sendPasswordResetEmail(toEmail: string, resetToken: string): Promise<boolean> {
+export async function sendPasswordResetEmail(
+  toEmail: string,
+  resetToken: string,
+): Promise<boolean> {
+  const client = getClient();
+  if (!client) return false;
+
   try {
-    const { client, fromEmail } = await getUncachableResendClient();
-    
-    const baseUrl = process.env.REPLIT_DEV_DOMAIN 
-      ? `https://${process.env.REPLIT_DEV_DOMAIN}`
-      : 'http://localhost:5000';
-    
-    const resetLink = `${baseUrl}/reset-password?token=${resetToken}`;
-    
+    const resetLink = `${getBaseUrl()}/reset-password?token=${resetToken}`;
+
     await client.emails.send({
-      from: fromEmail,
+      from: getFromEmail(),
       to: toEmail,
-      subject: 'Reset your Trading Knights password',
+      subject: "Reset your Trading Knights password",
       html: `
         <!DOCTYPE html>
         <html>
@@ -143,10 +115,9 @@ export async function sendPasswordResetEmail(toEmail: string, resetToken: string
       `,
     });
 
-    console.log('Password reset email sent successfully to:', toEmail);
     return true;
   } catch (error: any) {
-    console.error('Error sending password reset email:', error);
+    console.error("[email] Error sending password reset email:", error?.message || error);
     return false;
   }
 }

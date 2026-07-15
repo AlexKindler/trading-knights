@@ -80,9 +80,14 @@ export default function Portfolio() {
     );
   }
 
-  const pnlPercent = portfolio
-    ? ((portfolio.totalPnL / 1000) * 100).toFixed(1)
-    : "0";
+  // Derive the P&L baseline from the server-provided figures instead of a
+  // hardcoded $1000 starting balance. baseline = current value minus P&L,
+  // i.e. the amount originally invested — correct even after a bankruptcy reset.
+  const pnlBaseline = portfolio ? portfolio.totalValue - portfolio.totalPnL : 0;
+  const pnlPercent =
+    portfolio && pnlBaseline !== 0
+      ? ((portfolio.totalPnL / pnlBaseline) * 100).toFixed(1)
+      : "0.0";
   const isPositivePnL = (portfolio?.totalPnL ?? 0) > 0;
   const isNegativePnL = (portfolio?.totalPnL ?? 0) < 0;
 

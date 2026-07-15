@@ -16,17 +16,30 @@ import {
   Shield,
   Coins,
   Users,
+  Sparkles,
+  Zap,
+  Brain,
 } from "lucide-react";
 import type { MarketWithDetails } from "@shared/schema";
 
 export default function Home() {
   const { user } = useAuth();
 
-  const { data: markets, isLoading: marketsLoading } = useQuery<MarketWithDetails[]>({
+  const {
+    data: markets,
+    isLoading: marketsLoading,
+    isError: marketsError,
+    refetch: refetchMarkets,
+  } = useQuery<MarketWithDetails[]>({
     queryKey: ["/api/markets"],
   });
 
-  const { data: stocks, isLoading: stocksLoading } = useQuery<MarketWithDetails[]>({
+  const {
+    data: stocks,
+    isLoading: stocksLoading,
+    isError: stocksError,
+    refetch: refetchStocks,
+  } = useQuery<MarketWithDetails[]>({
     queryKey: ["/api/stocks"],
   });
 
@@ -36,44 +49,53 @@ export default function Home() {
   return (
     <div className="min-h-screen">
       <StockTicker />
-      <section className="border-b bg-gradient-to-b from-primary/5 to-background px-4 py-16">
-        <div className="mx-auto max-w-4xl text-center">
-          <Badge variant="secondary" className="mb-4">
+      <section className="relative overflow-hidden border-b bg-gradient-to-b from-primary/10 via-primary/5 to-background px-4 py-20">
+        {/* Background decoration */}
+        <div className="absolute inset-0 overflow-hidden pointer-events-none">
+          <div className="absolute -top-40 -right-40 w-80 h-80 bg-primary/10 rounded-full blur-3xl" />
+          <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-purple-500/10 rounded-full blur-3xl" />
+        </div>
+
+        <div className="relative mx-auto max-w-4xl text-center">
+          <Badge variant="secondary" className="mb-4 gap-1 px-3 py-1">
+            <Sparkles className="h-3 w-3" />
             Menlo School Edition
           </Badge>
-          <h1 className="text-4xl font-bold tracking-tight sm:text-5xl md:text-6xl">
+          <h1 className="text-4xl font-bold tracking-tight sm:text-5xl md:text-6xl bg-gradient-to-r from-foreground via-foreground to-foreground/70 bg-clip-text">
             Trading Knights
           </h1>
-          <p className="mx-auto mt-4 max-w-2xl text-lg text-muted-foreground">
-            Predict outcomes and trade stocks for school events, sports, and more.
-            Learn about markets with play money in a safe, educational environment.
+          <p className="mx-auto mt-6 max-w-2xl text-lg text-muted-foreground leading-relaxed">
+            The ultimate prediction market for Menlo School. Trade club stocks, bet on school events,
+            and compete on the leaderboard — all with play money.
           </p>
-          <div className="mt-8 flex flex-wrap items-center justify-center gap-4">
+          <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
             {!user ? (
               <>
                 <Link href="/register">
-                  <Button size="lg" className="gap-2" data-testid="button-get-started">
-                    Get Started
+                  <Button size="lg" className="gap-2 shadow-lg shadow-primary/20" data-testid="button-get-started">
+                    Get Started Free
                     <ArrowRight className="h-4 w-4" />
                   </Button>
                 </Link>
                 <Link href="/markets">
-                  <Button variant="outline" size="lg" data-testid="button-explore">
+                  <Button variant="outline" size="lg" className="gap-2" data-testid="button-explore">
+                    <Zap className="h-4 w-4" />
                     Explore Markets
                   </Button>
                 </Link>
               </>
             ) : (
               <>
-                <Link href="/markets">
-                  <Button size="lg" className="gap-2" data-testid="button-trade-now">
+                <Link href="/trading">
+                  <Button size="lg" className="gap-2 shadow-lg shadow-primary/20" data-testid="button-trade-now">
                     <TrendingUp className="h-4 w-4" />
-                    Trade Now
+                    Start Trading
                   </Button>
                 </Link>
-                <Link href="/portfolio">
-                  <Button variant="outline" size="lg" data-testid="button-view-wallet">
-                    View Wallet
+                <Link href="/mk-ai">
+                  <Button variant="outline" size="lg" className="gap-2" data-testid="button-mk-ai">
+                    <Brain className="h-4 w-4" />
+                    Try MK AI
                   </Button>
                 </Link>
               </>
@@ -151,6 +173,15 @@ export default function Home() {
                 </Card>
               ))}
             </div>
+          ) : marketsError ? (
+            <Card>
+              <CardContent className="py-8 text-center">
+                <p className="text-muted-foreground">Couldn't load prediction markets.</p>
+                <Button className="mt-3" size="sm" onClick={() => refetchMarkets()} data-testid="button-retry-markets">
+                  Retry
+                </Button>
+              </CardContent>
+            </Card>
           ) : predictionMarkets.length > 0 ? (
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
               {predictionMarkets.map((market) => (
@@ -192,6 +223,15 @@ export default function Home() {
                 </Card>
               ))}
             </div>
+          ) : stocksError ? (
+            <Card>
+              <CardContent className="py-8 text-center">
+                <p className="text-muted-foreground">Couldn't load stocks.</p>
+                <Button className="mt-3" size="sm" onClick={() => refetchStocks()} data-testid="button-retry-stocks">
+                  Retry
+                </Button>
+              </CardContent>
+            </Card>
           ) : stockListings.length > 0 ? (
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
               {stockListings.map((market) => (

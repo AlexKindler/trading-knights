@@ -1,7 +1,7 @@
 import { Link } from "wouter";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Clock, TrendingUp, TrendingDown, Users } from "lucide-react";
+import { Clock } from "lucide-react";
 import type { MarketWithDetails } from "@shared/schema";
 
 interface MarketCardProps {
@@ -16,7 +16,7 @@ export function MarketCard({ market }: MarketCardProps) {
   const noPrice = noOutcome?.currentPrice ?? 0.5;
 
   const formatPrice = (price: number) => {
-    return `$${(price * 100).toFixed(0)}¢`;
+    return `${Math.round(price * 100)}¢`;
   };
 
   const formatTimeRemaining = (closeAt: Date | null) => {
@@ -84,11 +84,6 @@ export function MarketCard({ market }: MarketCardProps) {
                 {formatPrice(noPrice)}
               </p>
             </div>
-          </div>
-
-          <div className="flex items-center gap-1 text-xs text-muted-foreground">
-            <Users className="h-3 w-3" />
-            <span>124 traders</span>
           </div>
         </div>
 

@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/context/AuthContext";
 import { Navbar } from "@/components/Navbar";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import NotFound from "@/pages/not-found";
 import Home from "@/pages/Home";
 import Markets from "@/pages/Markets";
@@ -56,7 +57,9 @@ function App() {
           <div className="min-h-screen bg-background flex flex-col">
             <Navbar />
             <main className="flex-1">
-              <Router />
+              <ErrorBoundary>
+                <Router />
+              </ErrorBoundary>
             </main>
             <footer className="border-t py-4 mt-8">
               <div className="container mx-auto px-4 text-center">

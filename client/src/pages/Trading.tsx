@@ -23,7 +23,7 @@ export default function Trading() {
   const [selectedStockId, setSelectedStockId] = useState<string | null>(null);
   const [lastUpdate, setLastUpdate] = useState(new Date());
 
-  const { data: stocks, isLoading, refetch } = useQuery<MarketWithDetails[]>({
+  const { data: stocks, isLoading, isError, refetch } = useQuery<MarketWithDetails[]>({
     queryKey: ["/api/stocks"],
     refetchInterval: 5000,
   });
@@ -192,6 +192,14 @@ export default function Trading() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
+                {isError ? (
+                  <div className="py-8 text-center">
+                    <p className="text-sm text-muted-foreground">Couldn't load stocks.</p>
+                    <Button className="mt-3" size="sm" onClick={() => refetch()} data-testid="button-retry">
+                      Retry
+                    </Button>
+                  </div>
+                ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 max-h-[400px] overflow-y-auto">
                   {isLoading ? (
                     Array.from({ length: 12 }).map((_, i) => (
@@ -225,6 +233,7 @@ export default function Trading() {
                     })
                   )}
                 </div>
+                )}
               </CardContent>
             </Card>
           </div>

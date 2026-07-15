@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/context/AuthContext";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, ArrowUpRight, ArrowDownRight, Wallet, Package } from "lucide-react";
 import type { MarketWithDetails, Position } from "@shared/schema";
@@ -41,31 +41,55 @@ export function TradingWidget({ market, selectedOutcomeId, onOutcomeSelect }: Tr
     ? selectedOutcome?.currentPrice ?? 0.5
     : market.stockMeta?.currentPrice ?? 10;
 
-  const qty = parseInt(quantity) || 0;
-  const total = qty * currentPrice;
-  const estimatedReturn = isPredictionMarket ? qty * 1 - total : 0;
+  // Strict integer quantity parsing: reject decimals ("2.5"), scientific
+  // notation ("1e2"), and anything outside 1..1000.
+  const rawQty = quantity.trim();
+  const isValidQty = /^\d+$/.test(rawQty);
+  const qty = isValidQty ? parseInt(rawQty, 10) : 0;
+  const qtyInRange = qty >= 1 && qty <= 1000;
+  const total = Math.round(qty * currentPrice * 100) / 100;
+  // Gross payout if a winning YES/NO share settles at $1.00 each.
+  const grossPayout = isPredictionMarket ? qty : 0;
 
   const tradeMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/trades", {
-        marketId: market.id,
-        outcomeId: selectedOutcomeId,
-        side,
-        qty,
+      // Use fetch directly so we surface the clean server-provided message.
+      // (apiRequest throws a wrapped "400: {json}" string that leaks internals.)
+      const res = await fetch("/api/trades", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          marketId: market.id,
+          outcomeId: selectedOutcomeId ?? null,
+          side,
+          qty,
+        }),
       });
       if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.message || "Trade failed");
+        let message = "Trade failed";
+        try {
+          const data = await res.json();
+          if (data?.message) message = data.message;
+        } catch {
+          // non-JSON error body; keep the default message
+        }
+        throw new Error(message);
       }
       return res.json();
     },
     onSuccess: () => {
       toast({
         title: "Trade executed!",
-        description: `Successfully ${side === "BUY" ? "bought" : "sold"} ${qty} shares`,
+        description: `Successfully ${side === "BUY" ? "bought" : "sold"} ${qty} ${qty === 1 ? "share" : "shares"}`,
       });
       setQuantity("");
       refreshUser();
+      // Prices and balances live under several keys (staleTime is Infinity),
+      // so invalidate every surface this trade can affect.
+      queryClient.invalidateQueries({ queryKey: ["/api/stocks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stocks", market.id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/markets"] });
       queryClient.invalidateQueries({ queryKey: ["/api/markets", market.id] });
       queryClient.invalidateQueries({ queryKey: ["/api/portfolio"] });
     },
@@ -90,8 +114,8 @@ export function TradingWidget({ market, selectedOutcomeId, onOutcomeSelect }: Tr
   };
 
   // Validate trade conditions
-  const canBuy = user?.status === "VERIFIED" && qty > 0 && total <= (user?.balance ?? 0);
-  const canSell = user?.status === "VERIFIED" && qty > 0 && qty <= ownedShares;
+  const canBuy = user?.status === "VERIFIED" && qtyInRange && total <= (user?.balance ?? 0);
+  const canSell = user?.status === "VERIFIED" && qtyInRange && qty <= ownedShares;
   const canTrade = side === "BUY" ? canBuy : canSell;
 
   if (market.status !== "OPEN") {
@@ -129,7 +153,7 @@ export function TradingWidget({ market, selectedOutcomeId, onOutcomeSelect }: Tr
               >
                 {outcome.label}
                 <span className="ml-2 font-mono">
-                  ${(outcome.currentPrice * 100).toFixed(0)}¢
+                  {Math.round(outcome.currentPrice * 100)}¢
                 </span>
               </Button>
             ))}
@@ -178,20 +202,25 @@ export function TradingWidget({ market, selectedOutcomeId, onOutcomeSelect }: Tr
         <div className="space-y-2 rounded-md bg-muted p-3 text-sm">
           <div className="flex justify-between">
             <span className="text-muted-foreground">Price per share</span>
-            <span className="font-mono font-medium">${currentPrice.toFixed(2)}</span>
+            <span className="font-mono font-medium">
+              {isPredictionMarket ? `${Math.round(currentPrice * 100)}¢` : `$${currentPrice.toFixed(2)}`}
+            </span>
           </div>
           <div className="flex justify-between">
-            <span className="text-muted-foreground">Total cost</span>
+            <span className="text-muted-foreground">{side === "BUY" ? "Total cost" : "Proceeds"}</span>
             <span className="font-mono font-medium">${total.toFixed(2)}</span>
           </div>
-          {isPredictionMarket && side === "BUY" && qty > 0 && (
+          {isPredictionMarket && side === "BUY" && qtyInRange && (
             <div className="flex justify-between border-t pt-2">
-              <span className="text-muted-foreground">Potential return</span>
+              <span className="text-muted-foreground">Potential payout</span>
               <span className="font-mono font-medium text-green-600 dark:text-green-400">
-                +${estimatedReturn.toFixed(2)}
+                ${grossPayout.toFixed(2)}
               </span>
             </div>
           )}
+          <p className="text-xs text-muted-foreground">
+            Orders fill at the current market price, which may move with your trade.
+          </p>
         </div>
 
         {user && (

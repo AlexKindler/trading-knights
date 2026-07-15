@@ -24,7 +24,7 @@ export default function MarketDetail() {
   const { user } = useAuth();
   const [selectedOutcomeId, setSelectedOutcomeId] = useState<string | undefined>();
 
-  const { data: market, isLoading } = useQuery<MarketWithDetails>({
+  const { data: market, isLoading, isError, refetch } = useQuery<MarketWithDetails>({
     queryKey: ["/api/markets", params?.id],
     enabled: !!params?.id,
   });
@@ -70,6 +70,28 @@ export default function MarketDetail() {
             <Skeleton className="h-80" />
           </div>
         </div>
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center px-4">
+        <Card className="max-w-md text-center">
+          <CardContent className="pt-6">
+            <TrendingUp className="mx-auto h-12 w-12 text-muted-foreground" />
+            <h2 className="mt-4 text-xl font-semibold">Couldn't load this market</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Something went wrong. Please try again.
+            </p>
+            <div className="mt-4 flex justify-center gap-2">
+              <Button onClick={() => refetch()} data-testid="button-retry">Retry</Button>
+              <Link href="/markets">
+                <Button variant="outline">Back to Markets</Button>
+              </Link>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     );
   }

@@ -36,6 +36,9 @@ export default function MkParlay() {
 
   const { data: events, isLoading, error } = useQuery<PolymarketEvent[]>({
     queryKey: ["/api/polymarket/sports"],
+    // "Live from Polymarket" surface: refresh odds/volume periodically.
+    refetchInterval: 30000,
+    staleTime: 20000,
   });
 
   const betOnMutation = useMutation({
@@ -73,10 +76,14 @@ export default function MkParlay() {
     betOnMutation.mutate(event);
   };
 
-  const formatVolume = (volume: number) => {
-    if (volume >= 1000000) return `$${(volume / 1000000).toFixed(1)}M`;
-    if (volume >= 1000) return `$${(volume / 1000).toFixed(0)}K`;
-    return `$${volume.toFixed(0)}`;
+  const formatVolume = (volume: unknown) => {
+    // Guard against a malformed Gamma/Polymarket payload where volume is
+    // missing or a string — a bad value must not white-screen the page.
+    const num = typeof volume === "number" ? volume : Number(volume);
+    if (!Number.isFinite(num)) return "$0";
+    if (num >= 1000000) return `$${(num / 1000000).toFixed(1)}M`;
+    if (num >= 1000) return `$${(num / 1000).toFixed(0)}K`;
+    return `$${num.toFixed(0)}`;
   };
 
   const getOdds = (market: PolymarketEvent["markets"][0]) => {

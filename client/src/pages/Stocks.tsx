@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { StockCard } from "@/components/StockCard";
 import { StockTicker } from "@/components/StockTicker";
 import { useAuth } from "@/context/AuthContext";
-import { Search, Plus, BarChart3, TrendingUp, TrendingDown, Target, Shield, Briefcase, PiggyBank } from "lucide-react";
+import { Search, BarChart3, TrendingUp, Target, Shield, Briefcase, PiggyBank } from "lucide-react";
 import type { MarketWithDetails } from "@shared/schema";
 
 const categories = ["All", "Clubs", "Sports", "Events", "Food", "Activities"];
@@ -22,7 +22,7 @@ export default function Stocks() {
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [sortBy, setSortBy] = useState<SortOption>("growth");
 
-  const { data: stocks, isLoading } = useQuery<MarketWithDetails[]>({
+  const { data: stocks, isLoading, isError, refetch } = useQuery<MarketWithDetails[]>({
     queryKey: ["/api/stocks"],
   });
 
@@ -95,14 +95,6 @@ export default function Stocks() {
               <Shield className="h-3 w-3" />
               Long-Term
             </Badge>
-            {user?.status === "VERIFIED" && (
-              <Link href="/stocks/create">
-                <Button className="gap-2" data-testid="button-create-stock">
-                  <Plus className="h-4 w-4" />
-                  Create Stock
-                </Button>
-              </Link>
-            )}
           </div>
         </div>
 
@@ -288,6 +280,15 @@ export default function Stocks() {
               </Card>
             ))}
           </div>
+        ) : isError ? (
+          <Card>
+            <CardContent className="py-12 text-center">
+              <BarChart3 className="mx-auto h-12 w-12 text-muted-foreground/50" />
+              <h3 className="mt-4 text-lg font-medium">Couldn't load stocks</h3>
+              <p className="mt-2 text-muted-foreground">Something went wrong while loading the market.</p>
+              <Button className="mt-4" onClick={() => refetch()} data-testid="button-retry">Retry</Button>
+            </CardContent>
+          </Card>
         ) : filteredStocks && filteredStocks.length > 0 ? (
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
             {filteredStocks.map((market) => (
@@ -302,16 +303,8 @@ export default function Stocks() {
               <p className="mt-2 text-muted-foreground">
                 {search || selectedCategory !== "All"
                   ? "Try adjusting your filters"
-                  : "Be the first to create a stock listing!"}
+                  : "No stocks are listed yet. Check back soon!"}
               </p>
-              {user?.status === "VERIFIED" && (
-                <Link href="/stocks/create">
-                  <Button className="mt-4 gap-2">
-                    <Plus className="h-4 w-4" />
-                    Create Stock
-                  </Button>
-                </Link>
-              )}
             </CardContent>
           </Card>
         )}

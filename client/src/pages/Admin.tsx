@@ -71,7 +71,7 @@ const COMMON_OPPONENTS = [
 ];
 
 export default function Admin() {
-  const { user } = useAuth();
+  const { user, isLoading: authLoading } = useAuth();
   const { toast } = useToast();
   const [isCreateGameOpen, setIsCreateGameOpen] = useState(false);
   const [isCsvImportOpen, setIsCsvImportOpen] = useState(false);
@@ -79,11 +79,20 @@ export default function Admin() {
   const [scoreDialogOpen, setScoreDialogOpen] = useState<string | null>(null);
   const [menloScore, setMenloScore] = useState("");
   const [opponentScore, setOpponentScore] = useState("");
+  // Format a Date as a LOCAL "YYYY-MM-DDTHH:mm" string for a datetime-local
+  // input. Using toISOString() here would render the UTC wall-clock time and
+  // shift the displayed default by the timezone offset.
+  const toLocalDatetimeInput = (d: Date) => {
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
+      d.getHours()
+    )}:${pad(d.getMinutes())}`;
+  };
   const getDefaultGameDate = () => {
     const nextWeek = new Date();
     nextWeek.setDate(nextWeek.getDate() + 7);
     nextWeek.setHours(19, 0, 0, 0);
-    return nextWeek.toISOString().slice(0, 16);
+    return toLocalDatetimeInput(nextWeek);
   };
 
   const [newGame, setNewGame] = useState({
@@ -161,7 +170,12 @@ export default function Admin() {
 
   const createGameMutation = useMutation({
     mutationFn: async (gameData: typeof newGame) => {
-      const res = await apiRequest("POST", "/api/admin/games", gameData);
+      // The datetime-local value is local wall-clock time; send an absolute
+      // UTC ISO string so the server (z.coerce.date) stores the right instant.
+      const res = await apiRequest("POST", "/api/admin/games", {
+        ...gameData,
+        gameDate: new Date(gameData.gameDate).toISOString(),
+      });
       if (!res.ok) {
         const error = await res.json();
         throw new Error(error.message || "Failed to create game");
@@ -172,7 +186,7 @@ export default function Admin() {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/games"] });
       toast({ title: "Game created" });
       setIsCreateGameOpen(false);
-      setNewGame({ sport: "BASKETBALL", opponent: "", isHome: true, gameDate: "" });
+      setNewGame({ sport: "BASKETBALL", opponent: "", isHome: true, gameDate: getDefaultGameDate() });
     },
     onError: (error: Error) => {
       toast({ title: "Error", description: error.message, variant: "destructive" });
@@ -301,11 +315,18 @@ export default function Admin() {
 
       const isHome = homeAway.toLowerCase() === "home" || homeAway.toLowerCase() === "true";
 
+      const parsedDate = new Date(gameDate);
+      if (isNaN(parsedDate.getTime())) {
+        toast({ title: "Invalid date", description: `"${gameDate}" is not a valid date/time`, variant: "destructive" });
+        return;
+      }
+
       games.push({
         sport: sportUpper,
         opponent,
         isHome,
-        gameDate,
+        // Normalize the local datetime string to an absolute UTC ISO instant.
+        gameDate: parsedDate.toISOString(),
       });
     }
 
@@ -348,6 +369,16 @@ export default function Admin() {
       minute: "2-digit",
     });
   };
+
+  // Wait for the session to resolve before deciding access, otherwise a hard
+  // refresh briefly flashes "Access Denied" for a legitimate admin.
+  if (authLoading) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center px-4">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   if (!user || user.role !== "ADMIN") {
     return (
@@ -497,7 +528,7 @@ export default function Admin() {
                                   action: "dismiss",
                                 })
                               }
-                              disabled={resolveReportMutation.isPending}
+                              disabled={resolveReportMutation.isPending && resolveReportMutation.variables?.reportId === report.id}
                               data-testid={`button-dismiss-report-${report.id}`}
                             >
                               <XCircle className="mr-1 h-4 w-4" />
@@ -512,7 +543,7 @@ export default function Admin() {
                                   action: "hide",
                                 })
                               }
-                              disabled={resolveReportMutation.isPending}
+                              disabled={resolveReportMutation.isPending && resolveReportMutation.variables?.reportId === report.id}
                               data-testid={`button-hide-content-${report.id}`}
                             >
                               <EyeOff className="mr-1 h-4 w-4" />
@@ -575,10 +606,10 @@ export default function Admin() {
                             size="sm"
                             variant="destructive"
                             onClick={() => suspendUserMutation.mutate(u.id)}
-                            disabled={suspendUserMutation.isPending}
+                            disabled={suspendUserMutation.isPending && suspendUserMutation.variables === u.id}
                             data-testid={`button-suspend-user-${u.id}`}
                           >
-                            {suspendUserMutation.isPending ? (
+                            {suspendUserMutation.isPending && suspendUserMutation.variables === u.id ? (
                               <Loader2 className="h-4 w-4 animate-spin" />
                             ) : (
                               <>
@@ -802,10 +833,10 @@ export default function Admin() {
                               size="sm"
                               variant="outline"
                               onClick={() => createMarketMutation.mutate(game.id)}
-                              disabled={createMarketMutation.isPending}
+                              disabled={createMarketMutation.isPending && createMarketMutation.variables === game.id}
                               data-testid={`button-create-market-${game.id}`}
                             >
-                              {createMarketMutation.isPending ? (
+                              {createMarketMutation.isPending && createMarketMutation.variables === game.id ? (
                                 <Loader2 className="h-4 w-4 animate-spin" />
                               ) : (
                                 <>
@@ -866,11 +897,11 @@ export default function Admin() {
                                 </div>
                                 <Button
                                   onClick={() => handleUpdateScore(game.id)}
-                                  disabled={updateScoreMutation.isPending}
+                                  disabled={updateScoreMutation.isPending && updateScoreMutation.variables?.gameId === game.id}
                                   className="w-full"
                                   data-testid="button-submit-score"
                                 >
-                                  {updateScoreMutation.isPending ? (
+                                  {updateScoreMutation.isPending && updateScoreMutation.variables?.gameId === game.id ? (
                                     <Loader2 className="h-4 w-4 animate-spin" />
                                   ) : (
                                     "Save Score"
@@ -883,10 +914,10 @@ export default function Admin() {
                             size="sm"
                             variant="destructive"
                             onClick={() => deleteGameMutation.mutate(game.id)}
-                            disabled={deleteGameMutation.isPending}
+                            disabled={deleteGameMutation.isPending && deleteGameMutation.variables === game.id}
                             data-testid={`button-delete-game-${game.id}`}
                           >
-                            {deleteGameMutation.isPending ? (
+                            {deleteGameMutation.isPending && deleteGameMutation.variables === game.id ? (
                               <Loader2 className="h-4 w-4 animate-spin" />
                             ) : (
                               <Trash2 className="h-4 w-4" />
@@ -969,10 +1000,10 @@ export default function Admin() {
                               <Button
                                 size="sm"
                                 onClick={() => importPolymarketMutation.mutate(event)}
-                                disabled={importPolymarketMutation.isPending}
+                                disabled={importPolymarketMutation.isPending && importPolymarketMutation.variables?.id === event.id}
                                 data-testid={`button-import-${event.id}`}
                               >
-                                {importPolymarketMutation.isPending ? (
+                                {importPolymarketMutation.isPending && importPolymarketMutation.variables?.id === event.id ? (
                                   <Loader2 className="h-4 w-4 animate-spin" />
                                 ) : (
                                   <>

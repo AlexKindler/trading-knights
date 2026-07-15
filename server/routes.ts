@@ -3,9 +3,9 @@ import { createServer, type Server } from "http";
 import session from "express-session";
 import pgSession from "connect-pg-simple";
 import { pool } from "./db";
-import { storage } from "./storage";
+import { storage, TradeError } from "./storage";
 import { insertUserSchema, loginSchema, insertTradeSchema, insertCommentSchema, insertReportSchema, insertGameSchema } from "@shared/schema";
-import { createHash } from "crypto";
+import { hashPassword, verifyPassword, isLegacyHash } from "./auth";
 import { sendVerificationEmail, sendPasswordResetEmail } from "./email";
 
 // Extend express-session types
@@ -17,8 +17,71 @@ declare module "express-session" {
 
 const PgStore = pgSession(session);
 
-function hashPassword(password: string): string {
-  return createHash("sha256").update(password).digest("hex");
+// ---------------------------------------------------------------------------
+// Session helpers
+// ---------------------------------------------------------------------------
+
+// Regenerate the session id and bind it to the given user (prevents session
+// fixation). Resolves once the new session has been persisted.
+function loginSession(req: Request, userId: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    req.session.regenerate((regenErr) => {
+      if (regenErr) return reject(regenErr);
+      req.session.userId = userId;
+      req.session.save((saveErr) => {
+        if (saveErr) return reject(saveErr);
+        resolve();
+      });
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Tiny in-memory rate limiter (no new dependency).
+// Keyed by route + client IP. NOTE: on serverless this is per-instance, so it
+// is best-effort only — acceptable for abuse mitigation, not a hard guarantee.
+// ---------------------------------------------------------------------------
+function createRateLimiter(opts: { windowMs: number; max: number; key: string }) {
+  const hits = new Map<string, { count: number; resetAt: number }>();
+  return (req: Request, res: Response, next: NextFunction) => {
+    const now = Date.now();
+    // Lazy prune to keep the map from growing unbounded.
+    if (hits.size > 5000) {
+      for (const [k, v] of hits) {
+        if (v.resetAt <= now) hits.delete(k);
+      }
+    }
+    const ip = req.ip || req.socket.remoteAddress || "unknown";
+    const mapKey = `${opts.key}:${ip}`;
+    let entry = hits.get(mapKey);
+    if (!entry || entry.resetAt <= now) {
+      entry = { count: 0, resetAt: now + opts.windowMs };
+      hits.set(mapKey, entry);
+    }
+    entry.count++;
+    if (entry.count > opts.max) {
+      const retryAfter = Math.ceil((entry.resetAt - now) / 1000);
+      res.setHeader("Retry-After", String(retryAfter));
+      return res.status(429).json({ message: "Too many requests, please try again later." });
+    }
+    next();
+  };
+}
+
+// Auth endpoints: generous per-IP cap because an entire school shares one NAT
+// egress IP, so the whole student body draws from a single budget. 300 / 15 min
+// keeps onboarding waves working while still bounding runaway abuse. (Residual
+// per-account brute force is mitigated by scrypt hashing; a future hardening is
+// to add a per-email login limiter.)
+const authLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, max: 300, key: "auth" });
+// MK-AI endpoints: 20 requests / minute per IP (LLM calls are expensive).
+const mkAiLimiter = createRateLimiter({ windowMs: 60 * 1000, max: 20, key: "mk-ai" });
+
+// Clamp a ?limit query param to a sane positive range for candle endpoints.
+function clampLimit(raw: unknown, fallback = 100, max = 500): number {
+  const n = parseInt(String(raw ?? ""), 10);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.min(n, max);
 }
 
 // Middleware to require authentication
@@ -34,11 +97,19 @@ async function requireVerified(req: Request, res: Response, next: NextFunction) 
   if (!req.session.userId) {
     return res.status(401).json({ message: "Authentication required" });
   }
-  const user = await storage.getUser(req.session.userId);
-  if (!user || user.status !== "VERIFIED") {
-    return res.status(403).json({ message: "Email verification required" });
+  try {
+    const user = await storage.getUser(req.session.userId);
+    if (!user || user.status === "SUSPENDED") {
+      return res.status(403).json({ message: "Account not permitted" });
+    }
+    if (user.status !== "VERIFIED") {
+      return res.status(403).json({ message: "Email verification required" });
+    }
+    next();
+  } catch (error) {
+    console.error("requireVerified error:", error);
+    return res.status(500).json({ message: "Authorization check failed" });
   }
-  next();
 }
 
 // Middleware to require admin
@@ -46,21 +117,32 @@ async function requireAdmin(req: Request, res: Response, next: NextFunction) {
   if (!req.session.userId) {
     return res.status(401).json({ message: "Authentication required" });
   }
-  const user = await storage.getUser(req.session.userId);
-  if (!user || user.role !== "ADMIN") {
-    return res.status(403).json({ message: "Admin access required" });
+  try {
+    const user = await storage.getUser(req.session.userId);
+    if (!user || user.role !== "ADMIN" || user.status === "SUSPENDED") {
+      return res.status(403).json({ message: "Admin access required" });
+    }
+    next();
+  } catch (error) {
+    console.error("requireAdmin error:", error);
+    return res.status(500).json({ message: "Authorization check failed" });
   }
-  next();
 }
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  // Require a real session secret in production; allow a dev fallback locally.
+  if (process.env.NODE_ENV === "production" && !process.env.SESSION_SECRET) {
+    throw new Error("SESSION_SECRET must be set in production");
+  }
+  const sessionSecret = process.env.SESSION_SECRET || "campus-kalshi-dev-secret";
+
   // Session middleware with PostgreSQL store for persistence across restarts
   app.use(
     session({
-      secret: process.env.SESSION_SECRET || "campus-kalshi-secret-key",
+      secret: sessionSecret,
       resave: false,
       saveUninitialized: false,
       store: new PgStore({
@@ -86,7 +168,7 @@ export async function registerRoutes(
     "lincoln.bott@menloschool.org",
   ];
 
-  app.post("/api/auth/register", async (req, res) => {
+  app.post("/api/auth/register", authLimiter, async (req, res) => {
     try {
       const parsed = insertUserSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -98,10 +180,24 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Email already registered" });
       }
 
-      const user = await storage.createUser(parsed.data);
-      
-      // Auto-verify all users and give starting balance
-      await storage.updateUser(user.id, { status: "VERIFIED", balance: 1000 });
+      // storage.createUser creates ONLY the user row (no balance, no event).
+      // Hash the password here (scrypt) before storage persists it verbatim.
+      const user = await storage.createUser({
+        ...parsed.data,
+        password: hashPassword(parsed.data.password),
+      });
+
+      // Developer emails become ADMIN at creation — the ONLY path to admin.
+      const isDeveloper = DEVELOPER_EMAILS.includes(parsed.data.email.toLowerCase());
+
+      // Grant the single starting credit and (optionally) admin role here, so
+      // there is exactly ONE STARTING_CREDIT event per account.
+      await storage.updateUser(user.id, {
+        status: "VERIFIED",
+        balance: 1000,
+        role: isDeveloper ? "ADMIN" : "STUDENT",
+        hasMkAiAccess: isDeveloper,
+      });
       await storage.logBalanceEvent({
         userId: user.id,
         type: "STARTING_CREDIT",
@@ -110,7 +206,7 @@ export async function registerRoutes(
       });
 
       const updatedUser = await storage.getUser(user.id);
-      req.session.userId = user.id;
+      await loginSession(req, user.id);
       res.json({ user: { ...updatedUser, password: undefined } });
     } catch (error) {
       console.error("Registration error:", error);
@@ -118,7 +214,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/auth/login", async (req, res) => {
+  app.post("/api/auth/login", authLimiter, async (req, res) => {
     try {
       const parsed = loginSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -130,8 +226,7 @@ export async function registerRoutes(
         return res.status(401).json({ message: "Invalid credentials" });
       }
 
-      const hashedPassword = hashPassword(parsed.data.password);
-      if (user.password !== hashedPassword) {
+      if (!verifyPassword(parsed.data.password, user.password)) {
         return res.status(401).json({ message: "Invalid credentials" });
       }
 
@@ -139,7 +234,16 @@ export async function registerRoutes(
         return res.status(403).json({ message: "Account suspended" });
       }
 
-      req.session.userId = user.id;
+      // Transparently upgrade legacy (unsalted sha256) hashes to salted scrypt.
+      if (isLegacyHash(user.password)) {
+        try {
+          await storage.updateUser(user.id, { password: hashPassword(parsed.data.password) });
+        } catch (upgradeErr) {
+          console.error("Password hash upgrade failed:", upgradeErr);
+        }
+      }
+
+      await loginSession(req, user.id);
       res.json({ user: { ...user, password: undefined } });
     } catch (error) {
       console.error("Login error:", error);
@@ -164,7 +268,7 @@ export async function registerRoutes(
     res.json({ user: { ...user, password: undefined } });
   });
 
-  app.post("/api/auth/verify-email", async (req, res) => {
+  app.post("/api/auth/verify-email", authLimiter, async (req, res) => {
     try {
       const { token } = req.body;
       if (!token) {
@@ -176,7 +280,7 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Invalid or expired token" });
       }
 
-      req.session.userId = user.id;
+      await loginSession(req, user.id);
       res.json({ user: { ...user, password: undefined } });
     } catch (error) {
       console.error("Verification error:", error);
@@ -184,7 +288,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/auth/resend-verification", requireAuth, async (req, res) => {
+  app.post("/api/auth/resend-verification", authLimiter, requireAuth, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       if (!user) {
@@ -197,15 +301,10 @@ export async function registerRoutes(
 
       const token = await storage.createVerificationToken(user.id);
 
-      // Send verification email
-      const emailSent = await sendVerificationEmail(user.email, token);
-      
-      if (!emailSent) {
-        console.log("\n========================================");
-        console.log("📧 VERIFICATION LINK (Email failed to send):");
-        console.log(`   ${process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : 'http://localhost:5000'}/verify-email?token=${token}`);
-        console.log("========================================\n");
-      }
+      // Send verification email. If it fails, we do NOT print the live link to
+      // the console (leaking it would let anyone with log access take over the
+      // account). The email pipeline is the only delivery channel.
+      await sendVerificationEmail(user.email, token);
 
       res.json({ success: true });
     } catch (error) {
@@ -216,30 +315,28 @@ export async function registerRoutes(
 
   // ==================== PASSWORD RESET ROUTES ====================
 
-  app.post("/api/auth/forgot-password", async (req, res) => {
+  app.post("/api/auth/forgot-password", authLimiter, async (req, res) => {
     try {
-      const { email } = req.body;
+      // Normalize to lowercase to match register/login (which lowercase via the
+      // insert schema). Without this, a mixed-case address silently never
+      // matches and password reset fails.
+      const email = String(req.body.email ?? "").trim().toLowerCase();
       if (!email) {
         return res.status(400).json({ message: "Email required" });
       }
 
       const user = await storage.getUserByEmail(email);
-      
+
       // Always return success to prevent email enumeration attacks
       if (!user) {
         return res.json({ success: true, message: "If an account exists with this email, a reset link will be sent." });
       }
 
       const token = await storage.createPasswordResetToken(user.id);
-      
-      const emailSent = await sendPasswordResetEmail(user.email, token);
-      
-      if (!emailSent) {
-        console.log("\n========================================");
-        console.log("🔑 PASSWORD RESET LINK (Email failed to send):");
-        console.log(`   ${process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : 'http://localhost:5000'}/reset-password?token=${token}`);
-        console.log("========================================\n");
-      }
+
+      // Send the reset email only. Never print the live reset link to the
+      // console — log access would allow account takeover.
+      await sendPasswordResetEmail(user.email, token);
 
       res.json({ success: true, message: "If an account exists with this email, a reset link will be sent." });
     } catch (error) {
@@ -248,7 +345,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/auth/reset-password", async (req, res) => {
+  app.post("/api/auth/reset-password", authLimiter, async (req, res) => {
     try {
       const { token, newPassword } = req.body;
       if (!token || !newPassword) {
@@ -316,7 +413,7 @@ export async function registerRoutes(
 
   app.get("/api/markets/:id/outcomes/:outcomeId/candles", async (req, res) => {
     try {
-      const limit = parseInt(req.query.limit as string) || 100;
+      const limit = clampLimit(req.query.limit);
       const candles = await storage.getMarketCandles(req.params.id, req.params.outcomeId, limit);
       res.json(candles);
     } catch (error) {
@@ -362,7 +459,7 @@ export async function registerRoutes(
 
   app.get("/api/stocks/:id/candles", async (req, res) => {
     try {
-      const limit = parseInt(req.query.limit as string) || 100;
+      const limit = clampLimit(req.query.limit);
       const candles = await storage.getStockCandles(req.params.id, limit);
       res.json(candles);
     } catch (error) {
@@ -381,161 +478,34 @@ export async function registerRoutes(
       }
 
       const { marketId, outcomeId, side, qty } = parsed.data;
-      const user = await storage.getUser(req.session.userId!);
-      if (!user) {
-        return res.status(404).json({ message: "User not found" });
-      }
 
-      const market = await storage.getMarket(marketId);
-      if (!market || market.status !== "OPEN") {
-        return res.status(400).json({ message: "Market not available for trading" });
-      }
-
-      // Get current price
-      let currentPrice: number;
-      if (market.type === "PREDICTION" && outcomeId) {
-        const outcomes = market.outcomes;
-        const outcome = outcomes?.find((o) => o.id === outcomeId);
-        if (!outcome) {
-          return res.status(400).json({ message: "Outcome not found" });
-        }
-        currentPrice = outcome.currentPrice;
-      } else if (market.type === "STOCK") {
-        const stockMeta = market.stockMeta;
-        if (!stockMeta) {
-          return res.status(400).json({ message: "Stock not found" });
-        }
-        currentPrice = stockMeta.currentPrice;
-      } else {
-        return res.status(400).json({ message: "Invalid trade" });
-      }
-
-      const total = qty * currentPrice;
-
-      // Check balance for buy
-      if (side === "BUY") {
-        if (user.balance < total) {
-          return res.status(400).json({ message: "Insufficient balance" });
-        }
-      }
-
-      // Check position for sell
-      if (side === "SELL") {
-        const position = await storage.getPosition(user.id, marketId, outcomeId ?? undefined);
-        if (!position || position.qty < qty) {
-          return res.status(400).json({ message: "Insufficient shares" });
-        }
-      }
-
-      // Execute trade
-      const trade = await storage.createTrade({
-        userId: user.id,
+      // All trade logic (fresh price re-read, AMM impact BEFORE fill, balance /
+      // share checks, position upsert, price update) runs atomically inside
+      // storage.executeTrade (CONTRACT §1).
+      const result = await storage.executeTrade({
+        userId: req.session.userId!,
         marketId,
-        outcomeId: outcomeId || null,
+        outcomeId: outcomeId ?? null,
         side,
         qty,
-        price: currentPrice,
-        total,
       });
 
-      // Update user balance
-      const newBalance =
-        side === "BUY" ? user.balance - total : user.balance + total;
-      await storage.updateUser(user.id, { balance: newBalance });
+      // After a trade, apply the bankruptcy-reset rule and return the POST-reset
+      // balance (CONTRACT §3).
+      const freshUser = await storage.maybeBankruptcyReset(req.session.userId!);
 
-      // Log balance event
-      await storage.logBalanceEvent({
-        userId: user.id,
-        type: "TRADE",
-        amount: side === "BUY" ? -total : total,
-        note: `${side} ${qty} shares at $${currentPrice.toFixed(2)}`,
+      res.json({
+        trade: result.trade,
+        newBalance: freshUser.balance,
+        executedPrice: result.executedPrice,
+        priceAfter: result.priceAfter,
       });
-
-      // Update position
-      const existingPosition = await storage.getPosition(user.id, marketId, outcomeId ?? undefined);
-      if (side === "BUY") {
-        if (existingPosition) {
-          const newQty = existingPosition.qty + qty;
-          const newAvgCost =
-            (existingPosition.qty * existingPosition.avgCost + qty * currentPrice) /
-            newQty;
-          await storage.upsertPosition({
-            userId: user.id,
-            marketId,
-            outcomeId: outcomeId || null,
-            qty: newQty,
-            avgCost: newAvgCost,
-          });
-        } else {
-          await storage.upsertPosition({
-            userId: user.id,
-            marketId,
-            outcomeId: outcomeId || null,
-            qty,
-            avgCost: currentPrice,
-          });
-        }
-      } else {
-        // SELL
-        if (existingPosition) {
-          const newQty = existingPosition.qty - qty;
-          await storage.upsertPosition({
-            userId: user.id,
-            marketId,
-            outcomeId: outcomeId || null,
-            qty: newQty,
-            avgCost: existingPosition.avgCost,
-          });
-        }
-      }
-
-      // Simple AMM price update
-      if (market.type === "PREDICTION" && outcomeId) {
-        const priceChange = side === "BUY" ? 0.02 : -0.02;
-        const outcome = market.outcomes?.find((o) => o.id === outcomeId);
-        if (outcome) {
-          const newPrice = Math.max(0.01, Math.min(0.99, outcome.currentPrice + priceChange));
-          await storage.updateOutcome(outcomeId, { currentPrice: newPrice });
-
-          // Update opposite outcome
-          const otherOutcome = market.outcomes?.find((o) => o.id !== outcomeId);
-          if (otherOutcome) {
-            await storage.updateOutcome(otherOutcome.id, { currentPrice: 1 - newPrice });
-          }
-        }
-      } else if (market.type === "STOCK") {
-        const priceChange = side === "BUY" ? currentPrice * 0.01 : -currentPrice * 0.01;
-        await storage.updateStockMeta(marketId, {
-          currentPrice: Math.max(0.01, currentPrice + priceChange),
-        });
-      }
-
-      // Check for bankruptcy reset
-      const updatedUser = await storage.getUser(user.id);
-      if (updatedUser && updatedUser.balance <= 0) {
-        const canReset =
-          !updatedUser.lastBankruptcyReset ||
-          Date.now() - new Date(updatedUser.lastBankruptcyReset).getTime() >
-            24 * 60 * 60 * 1000;
-        if (canReset) {
-          await storage.updateUser(user.id, {
-            balance: 100,
-            lastBankruptcyReset: new Date(),
-          });
-          await storage.logBalanceEvent({
-            userId: user.id,
-            type: "BANKRUPTCY_RESET",
-            amount: 100,
-            note: "Automatic bankruptcy reset",
-          });
-        }
-      }
-
-      res.json({ trade, newBalance });
     } catch (error: any) {
+      if (error instanceof TradeError) {
+        return res.status(400).json({ message: error.message });
+      }
       console.error("Trade error:", error);
-      console.error("Trade error stack:", error?.stack);
-      res.status(500).json({ message: error?.message || "Trade failed" });
+      res.status(500).json({ message: "Trade failed" });
     }
   });
 
@@ -813,19 +783,13 @@ export async function registerRoutes(
           if (!yesOutcome || !noOutcome) {
             console.warn("Market missing expected Yes/No outcomes, skipping resolution");
           } else if (menloScore === opponentScore) {
-            // Tie game - don't resolve market, mark as cancelled
-            await storage.updateMarket(game.marketId, { status: "CLOSED" });
-            // Refund logic would go here in a real system
-            console.log("Game tied - market closed without resolution");
+            // Tie game — void the market and refund every holder at avg cost.
+            await storage.resolveMarket(game.marketId, { voidRefund: true });
           } else {
-            // Resolve market based on winner
-            await storage.updateMarket(game.marketId, { status: "RESOLVED" });
+            // Resolve and pay out the winning outcome (CONTRACT §2).
             const menloWon = menloScore > opponentScore;
             const winningOutcome = menloWon ? yesOutcome : noOutcome;
-            const losingOutcome = menloWon ? noOutcome : yesOutcome;
-
-            await storage.updateOutcome(winningOutcome.id, { currentPrice: 1 });
-            await storage.updateOutcome(losingOutcome.id, { currentPrice: 0 });
+            await storage.resolveMarket(game.marketId, { winningOutcomeId: winningOutcome.id });
           }
         }
       }
@@ -874,7 +838,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/mk-ai/purchase", requireVerified, async (req, res) => {
+  app.post("/api/mk-ai/purchase", mkAiLimiter, requireVerified, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       if (!user) {
@@ -902,16 +866,22 @@ export async function registerRoutes(
         note: "Purchased MK AI access",
       });
 
-      const sharePerDeveloper = Math.floor(MK_AI_PRICE / MK_AI_DEVELOPER_EMAILS.length);
+      // Split revenue evenly; distribute the floor remainder so no play-money
+      // is dropped. A developer without an account is skipped (their share is
+      // simply not minted — nothing is deducted from anyone).
+      const devCount = MK_AI_DEVELOPER_EMAILS.length;
+      const baseShare = Math.floor(MK_AI_PRICE / devCount);
+      let remainder = MK_AI_PRICE - baseShare * devCount;
       for (const devEmail of MK_AI_DEVELOPER_EMAILS) {
+        const share = baseShare + (remainder > 0 ? 1 : 0);
+        if (remainder > 0) remainder--;
         const developer = await storage.getUserByEmail(devEmail);
         if (developer) {
-          const devNewBalance = developer.balance + sharePerDeveloper;
-          await storage.updateUser(developer.id, { balance: devNewBalance });
+          await storage.updateUser(developer.id, { balance: developer.balance + share });
           await storage.logBalanceEvent({
             userId: developer.id,
             type: "ADMIN_ADJUST",
-            amount: sharePerDeveloper,
+            amount: share,
             note: `MK AI revenue share from ${user.email}`,
           });
         }
@@ -925,7 +895,7 @@ export async function registerRoutes(
   });
 
   // MK AI Advisor - full trading assistant with function calling
-  app.post("/api/mk-ai/advisor", requireVerified, async (req, res) => {
+  app.post("/api/mk-ai/advisor", mkAiLimiter, requireVerified, async (req, res) => {
     try {
       const user = await storage.getUser(req.session.userId!);
       if (!user) {
@@ -965,7 +935,15 @@ USER'S CURRENT PORTFOLIO:`;
         for (const pos of positions) {
           const market = allStocks.find(s => s.id === pos.marketId) || allPredictions.find(p => p.id === pos.marketId);
           if (market && pos.qty > 0) {
-            const currentPrice = market.type === "STOCK" ? market.stockMeta?.currentPrice || pos.avgCost : pos.avgCost;
+            // Mark to market: stocks use the current stock price; predictions use
+            // the current price of the held outcome (not avgCost, which zeroes P&L).
+            let currentPrice = pos.avgCost;
+            if (market.type === "STOCK") {
+              currentPrice = market.stockMeta?.currentPrice ?? pos.avgCost;
+            } else if (market.type === "PREDICTION") {
+              const outcome = market.outcomes?.find((o) => o.id === pos.outcomeId);
+              currentPrice = outcome?.currentPrice ?? pos.avgCost;
+            }
             const pnl = (currentPrice - pos.avgCost) * pos.qty;
             const ticker = market.type === "STOCK" ? market.stockMeta?.ticker : market.title.slice(0, 10);
             context += `\n- ${ticker}: ${pos.qty} shares @ $${pos.avgCost.toFixed(2)} avg (Current: $${currentPrice.toFixed(2)}, P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)})`;
@@ -1045,10 +1023,18 @@ Be confident, give specific recommendations with reasoning. When appropriate, pr
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
 
+      // If no OpenAI key is configured, respond with a clean SSE error rather
+      // than crashing (CONTRACT §7).
+      if (!process.env.OPENAI_API_KEY) {
+        res.write(`data: ${JSON.stringify({ error: "AI is not configured. Please try again later." })}\n\n`);
+        res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+        return res.end();
+      }
+
       const OpenAI = (await import("openai")).default;
       const openai = new OpenAI({
-        apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-        baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+        apiKey: process.env.OPENAI_API_KEY,
+        baseURL: process.env.OPENAI_BASE_URL,
       });
 
       // Define trading functions
@@ -1108,105 +1094,50 @@ Be confident, give specific recommendations with reasoning. When appropriate, pr
         for (const toolCall of toolCalls) {
           const tc = toolCall as any;
           const functionName = tc.function?.name;
-          const args = JSON.parse(tc.function?.arguments || "{}");
-          
+
           if (functionName === "buy_stock" || functionName === "sell_stock") {
             const side = functionName === "buy_stock" ? "BUY" : "SELL";
-            const { marketId, ticker } = args;
-            const quantity = Math.floor(Number(args.quantity) || 0);
-            
+            let ticker = "the stock";
             try {
-              const market = await storage.getMarket(marketId);
-              if (!market || market.status !== "OPEN" || !market.stockMeta) {
-                functionResults.push(`Failed to ${side.toLowerCase()} ${ticker}: Market not found or not available.`);
+              // Parse the model-supplied arguments inside the try so malformed
+              // JSON produces a graceful per-tool error instead of aborting.
+              const args = JSON.parse(tc.function?.arguments || "{}");
+              const marketId: string = args.marketId;
+              ticker = args.ticker || ticker;
+
+              // Defensively validate/clamp qty BEFORE calling executeTrade — the
+              // model must never be able to mint money with a bad quantity.
+              const quantity = Math.floor(Number(args.quantity));
+              if (!Number.isFinite(quantity) || quantity < 1 || quantity > 1000) {
+                functionResults.push(`Failed to ${side.toLowerCase()} ${ticker}: quantity must be a whole number between 1 and 1000.`);
+                continue;
+              }
+              if (!marketId) {
+                functionResults.push(`Failed to ${side.toLowerCase()} ${ticker}: missing market ID.`);
                 continue;
               }
 
-              const currentPrice = market.stockMeta.currentPrice;
-              const total = quantity * currentPrice;
-
-              // Validate trade
-              if (side === "BUY" && user.balance < total) {
-                functionResults.push(`Failed to buy ${quantity} shares of ${ticker}: Insufficient balance. Need $${total.toFixed(2)} but have $${user.balance.toFixed(2)}.`);
-                continue;
-              }
-
-              if (side === "SELL") {
-                const position = await storage.getPosition(user.id, marketId);
-                if (!position || position.qty < quantity) {
-                  functionResults.push(`Failed to sell ${quantity} shares of ${ticker}: You only own ${position?.qty || 0} shares.`);
-                  continue;
-                }
-              }
-
-              // Execute trade
-              const trade = await storage.createTrade({
+              // Single source of truth for trade execution (CONTRACT §1) — the
+              // AMM impact is applied before the fill, so no riskless round trip.
+              const result = await storage.executeTrade({
                 userId: user.id,
                 marketId,
                 outcomeId: null,
                 side,
                 qty: quantity,
-                price: currentPrice,
-                total,
               });
 
-              // Update balance
-              const newBalance = side === "BUY" ? user.balance - total : user.balance + total;
-              await storage.updateUser(user.id, { balance: newBalance });
-              user.balance = newBalance; // Update local copy
+              // Keep the local balance copy in sync for later context / messaging.
+              user.balance = result.user.balance;
 
-              // Log balance event
-              await storage.logBalanceEvent({
-                userId: user.id,
-                type: "TRADE",
-                amount: side === "BUY" ? -total : total,
-                note: `MK AI: ${side} ${quantity} shares of ${ticker} at $${currentPrice.toFixed(2)}`,
-              });
-
-              // Update position
-              const existingPosition = await storage.getPosition(user.id, marketId);
-              if (side === "BUY") {
-                if (existingPosition) {
-                  const newQty = existingPosition.qty + quantity;
-                  const newAvgCost = (existingPosition.qty * existingPosition.avgCost + quantity * currentPrice) / newQty;
-                  await storage.upsertPosition({
-                    userId: user.id,
-                    marketId,
-                    outcomeId: null,
-                    qty: newQty,
-                    avgCost: newAvgCost,
-                  });
-                } else {
-                  await storage.upsertPosition({
-                    userId: user.id,
-                    marketId,
-                    outcomeId: null,
-                    qty: quantity,
-                    avgCost: currentPrice,
-                  });
-                }
-              } else {
-                if (existingPosition) {
-                  const newQty = existingPosition.qty - quantity;
-                  await storage.upsertPosition({
-                    userId: user.id,
-                    marketId,
-                    outcomeId: null,
-                    qty: newQty,
-                    avgCost: existingPosition.avgCost,
-                  });
-                }
-              }
-
-              // Update stock price (simple AMM)
-              const priceChange = side === "BUY" ? currentPrice * 0.01 : -currentPrice * 0.01;
-              await storage.updateStockMeta(marketId, {
-                currentPrice: Math.max(0.01, currentPrice + priceChange),
-              });
-
-              functionResults.push(`Successfully ${side === "BUY" ? "bought" : "sold"} ${quantity} shares of ${ticker} at $${currentPrice.toFixed(2)} for $${total.toFixed(2)}. New balance: $${newBalance.toFixed(2)}`);
+              functionResults.push(`Successfully ${side === "BUY" ? "bought" : "sold"} ${quantity} shares of ${ticker} at $${result.executedPrice.toFixed(2)}. New balance: $${result.user.balance.toFixed(2)}`);
             } catch (error: any) {
-              functionResults.push(`Trade error for ${ticker}: ${error.message}`);
+              if (error instanceof TradeError) {
+                functionResults.push(`Failed to ${side.toLowerCase()} ${ticker}: ${error.message}`);
+              } else {
+                console.error("MK AI trade error:", error);
+                functionResults.push(`Trade error for ${ticker}: could not complete the trade.`);
+              }
             }
           }
         }
@@ -1329,6 +1260,9 @@ Be confident, give specific recommendations with reasoning. When appropriate, pr
   });
 
   // Auto-import or get existing polymarket market for betting
+  // Verified students use this from the MK Parlay page's "Bet Now" button to
+  // open (auto-importing if needed) a market for a live sports event. It must
+  // NOT be admin-only or the whole student-facing betting flow 403s.
   app.post("/api/polymarket/bet-on", requireAuth, requireVerified, async (req, res) => {
     try {
       const { eventId } = req.body;

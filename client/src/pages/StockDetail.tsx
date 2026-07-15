@@ -22,7 +22,7 @@ import type { MarketWithDetails, Comment } from "@shared/schema";
 export default function StockDetail() {
   const [, params] = useRoute("/stocks/:id");
 
-  const { data: market, isLoading } = useQuery<MarketWithDetails>({
+  const { data: market, isLoading, isError, refetch } = useQuery<MarketWithDetails>({
     queryKey: ["/api/stocks", params?.id],
     enabled: !!params?.id,
   });
@@ -73,6 +73,28 @@ export default function StockDetail() {
             <Skeleton className="h-80" />
           </div>
         </div>
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center px-4">
+        <Card className="max-w-md text-center">
+          <CardContent className="pt-6">
+            <BarChart3 className="mx-auto h-12 w-12 text-muted-foreground" />
+            <h2 className="mt-4 text-xl font-semibold">Couldn't load this stock</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Something went wrong. Please try again.
+            </p>
+            <div className="mt-4 flex justify-center gap-2">
+              <Button onClick={() => refetch()} data-testid="button-retry">Retry</Button>
+              <Link href="/stocks">
+                <Button variant="outline">Back to Stocks</Button>
+              </Link>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     );
   }
@@ -136,7 +158,7 @@ export default function StockDetail() {
               <Minus className="h-5 w-5" />
             )}
             <span>
-              {isPositive ? "+" : ""}${Math.abs(priceChange).toFixed(2)} (
+              {isPositive ? "+" : isNegative ? "-" : ""}${Math.abs(priceChange).toFixed(2)} (
               {isPositive ? "+" : ""}
               {priceChangePercent}%)
             </span>

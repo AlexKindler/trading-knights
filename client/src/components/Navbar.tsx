@@ -10,7 +10,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { TrendingUp, BarChart3, Wallet, Trophy, Menu, LogOut, User, Shield, Search, Sun, Moon, Brain, Zap, Briefcase, Target } from "lucide-react";
+import { TrendingUp, Wallet, Trophy, Menu, LogOut, User, Shield, Sun, Moon, Brain, Zap, Briefcase } from "lucide-react";
 import { useState, useEffect } from "react";
 
 const navItems = [
@@ -28,24 +28,28 @@ export function Navbar() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isDark, setIsDark] = useState(false);
 
+  // Restore the saved theme on load. Persist BOTH directions so switching to
+  // light sticks across reloads; with no saved preference respect the class
+  // the HTML shipped with (index.html defaults to dark).
   useEffect(() => {
-    const isDarkMode = document.documentElement.classList.contains("dark");
-    setIsDark(isDarkMode);
+    const savedTheme = localStorage.getItem("theme");
+    if (savedTheme === "light") {
+      document.documentElement.classList.remove("dark");
+      setIsDark(false);
+    } else if (savedTheme === "dark") {
+      document.documentElement.classList.add("dark");
+      setIsDark(true);
+    } else {
+      setIsDark(document.documentElement.classList.contains("dark"));
+    }
   }, []);
 
   const toggleTheme = () => {
-    document.documentElement.classList.toggle("dark");
-    setIsDark(!isDark);
-    localStorage.setItem("theme", isDark ? "light" : "dark");
+    const next = !document.documentElement.classList.contains("dark");
+    document.documentElement.classList.toggle("dark", next);
+    setIsDark(next);
+    localStorage.setItem("theme", next ? "dark" : "light");
   };
-
-  useEffect(() => {
-    const savedTheme = localStorage.getItem("theme");
-    if (savedTheme === "dark") {
-      document.documentElement.classList.add("dark");
-      setIsDark(true);
-    }
-  }, []);
 
   const formatBalance = (balance: number) => {
     return new Intl.NumberFormat("en-US", {
@@ -67,38 +71,39 @@ export function Navbar() {
             <span className="hidden font-semibold sm:inline-block" data-testid="text-logo">Trading Knights</span>
           </Link>
 
-          <nav className="hidden items-center gap-1 md:flex">
+          <nav className="hidden items-center gap-1 lg:flex">
             {navItems.map((item) => {
               const isActive = location === item.href || location.startsWith(item.href + "/");
               return (
-                <Link key={item.href} href={item.href}>
-                  <Button
-                    variant={isActive ? "secondary" : "ghost"}
-                    size="sm"
-                    className="gap-2"
-                    data-testid={`link-nav-${item.label.toLowerCase()}`}
-                  >
+                <Button
+                  key={item.href}
+                  asChild
+                  variant={isActive ? "secondary" : "ghost"}
+                  size="sm"
+                  className="gap-2"
+                  data-testid={`link-nav-${item.label.toLowerCase()}`}
+                >
+                  <Link href={item.href}>
                     <item.icon className="h-4 w-4" />
                     {item.label}
-                  </Button>
-                </Link>
+                  </Link>
+                </Button>
               );
             })}
           </nav>
         </div>
 
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" className="hidden sm:flex" data-testid="button-search">
-            <Search className="h-4 w-4" />
-          </Button>
-
           <Button
             variant="ghost"
             size="icon"
             onClick={toggleTheme}
+            aria-label={isDark ? "Switch to light theme" : "Switch to dark theme"}
+            title={isDark ? "Switch to light theme" : "Switch to dark theme"}
             data-testid="button-theme-toggle"
           >
             {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            <span className="sr-only">Toggle theme</span>
           </Button>
 
           {user ? (
@@ -160,47 +165,48 @@ export function Navbar() {
             </>
           ) : (
             <div className="flex items-center gap-2">
-              <Link href="/login">
-                <Button variant="ghost" size="sm" data-testid="link-login">
-                  Log in
-                </Button>
-              </Link>
-              <Link href="/register">
-                <Button size="sm" data-testid="link-register">
-                  Sign up
-                </Button>
-              </Link>
+              <Button asChild variant="ghost" size="sm" data-testid="link-login">
+                <Link href="/login">Log in</Link>
+              </Button>
+              <Button asChild size="sm" data-testid="link-register">
+                <Link href="/register">Sign up</Link>
+              </Button>
             </div>
           )}
 
           <Button
             variant="ghost"
             size="icon"
-            className="md:hidden"
+            className="lg:hidden"
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            aria-label={mobileMenuOpen ? "Close menu" : "Open menu"}
+            aria-expanded={mobileMenuOpen}
             data-testid="button-mobile-menu"
           >
             <Menu className="h-5 w-5" />
+            <span className="sr-only">Toggle navigation menu</span>
           </Button>
         </div>
       </div>
 
       {mobileMenuOpen && (
-        <div className="border-t bg-background p-4 md:hidden">
+        <div className="border-t bg-background p-4 lg:hidden">
           <nav className="flex flex-col gap-2">
             {navItems.map((item) => {
               const isActive = location === item.href;
               return (
-                <Link key={item.href} href={item.href} onClick={() => setMobileMenuOpen(false)}>
-                  <Button
-                    variant={isActive ? "secondary" : "ghost"}
-                    className="w-full justify-start gap-2"
-                    data-testid={`link-mobile-nav-${item.label.toLowerCase()}`}
-                  >
+                <Button
+                  key={item.href}
+                  asChild
+                  variant={isActive ? "secondary" : "ghost"}
+                  className="w-full justify-start gap-2"
+                  data-testid={`link-mobile-nav-${item.label.toLowerCase()}`}
+                >
+                  <Link href={item.href} onClick={() => setMobileMenuOpen(false)}>
                     <item.icon className="h-4 w-4" />
                     {item.label}
-                  </Button>
-                </Link>
+                  </Link>
+                </Button>
               );
             })}
           </nav>

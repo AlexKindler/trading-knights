@@ -5,6 +5,9 @@ import { TrendingUp, TrendingDown } from "lucide-react";
 export function StockTicker() {
   const { data: stocks } = useQuery<MarketWithDetails[]>({
     queryKey: ["/api/stocks"],
+    // "Live" ticker: override the global staleTime:Infinity so prices refresh.
+    refetchInterval: 15000,
+    staleTime: 10000,
   });
 
   if (!stocks || stocks.length === 0) return null;

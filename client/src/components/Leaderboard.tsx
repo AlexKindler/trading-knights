@@ -15,7 +15,7 @@ export function Leaderboard() {
   const { user } = useAuth();
   const [timeFilter, setTimeFilter] = useState<TimeFilter>("all");
 
-  const { data: leaderboard, isLoading } = useQuery<LeaderboardEntry[]>({
+  const { data: leaderboard, isLoading, isError } = useQuery<LeaderboardEntry[]>({
     queryKey: ["/api/leaderboard", timeFilter],
   });
 
@@ -101,7 +101,15 @@ export function Leaderboard() {
         </Tabs>
       </CardHeader>
       <CardContent>
-        {!leaderboard || leaderboard.length === 0 ? (
+        {isError ? (
+          <div className="py-8 text-center">
+            <TrendingDown className="mx-auto h-10 w-10 text-muted-foreground/50" />
+            <p className="mt-4 font-medium">Couldn't load the leaderboard</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Something went wrong fetching rankings. Please try again later.
+            </p>
+          </div>
+        ) : !leaderboard || leaderboard.length === 0 ? (
           <div className="py-8 text-center text-muted-foreground">
             No rankings yet. Start trading to appear on the leaderboard!
           </div>

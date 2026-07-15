@@ -51,7 +51,9 @@ app.use((req, res, next) => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
+      // Only include the response body for error responses — never log full
+      // bodies for successful API responses (may contain sensitive data).
+      if (capturedJsonResponse && res.statusCode >= 400) {
         logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
       }
 
@@ -71,8 +73,12 @@ const initPromise = (async () => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
 
-    res.status(status).json({ message });
-    throw err;
+    // Log the error but do NOT re-throw after responding — re-throwing crashes
+    // the process (and, on serverless, the whole invocation).
+    console.error("[error-handler]", status, err?.stack || err);
+    if (!res.headersSent) {
+      res.status(status).json({ message });
+    }
   });
 
   // Only serve static files in production (non-Vercel) or local dev
@@ -86,15 +92,19 @@ const initPromise = (async () => {
   initialized = true;
 })();
 
+// Resolves after registerRoutes (and static/vite setup) completes. The Vercel
+// serverless entrypoint awaits this before handling a request.
+export const ready = initPromise;
+
 // Only start the server if not running on Vercel
 if (!process.env.VERCEL) {
   initPromise.then(() => {
     const port = parseInt(process.env.PORT || "5000", 10);
+    // NOTE: reusePort removed — it crashes on macOS/Node.
     httpServer.listen(
       {
         port,
         host: "0.0.0.0",
-        reusePort: true,
       },
       () => {
         log(`serving on port ${port}`);

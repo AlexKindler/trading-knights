@@ -165,40 +165,64 @@ export async function generateHistoricalCandles(marketId: string, initialPrice: 
   }
 }
 
-const VIBE_MARKET_ID = "200aaca8-b63f-416f-b2f1-d8dfc92cdb71";
-
-export async function updateStockPrices(): Promise<void> {
+/**
+ * Advance simulated stock prices based on ELAPSED time since each profile's
+ * persisted lastUpdated (CONTRACT §9). Idempotent and safe to call on every
+ * stock read: it is a cheap no-op for any profile that hasn't aged past the
+ * tick interval. It bases the random walk on the CURRENT market price so
+ * trade-driven moves are preserved rather than destructively overwritten.
+ */
+export async function maybeAdvanceStockPrices(intervalMinutes: number = 5): Promise<void> {
+  const intervalMs = intervalMinutes * 60 * 1000;
+  const now = Date.now();
   const profiles = await db.select().from(stockSimProfiles);
-  
+
   for (const profile of profiles) {
-    const isVibe = profile.marketId === VIBE_MARKET_ID;
-    
+    const lastMs = new Date(profile.lastUpdated).getTime();
+    const elapsed = now - lastMs;
+    if (elapsed < intervalMs) continue; // not enough time has passed
+
+    // Advance by the whole intervals elapsed, capped so a long gap (e.g. a
+    // serverless cold start after hours) can't produce one enormous jump.
+    const ticks = Math.min(Math.floor(elapsed / intervalMs), 12);
+
+    const metaRows = await db.select().from(stockMeta)
+      .where(eq(stockMeta.marketId, profile.marketId)).limit(1);
+    if (!metaRows[0]) continue;
+    const openBase = metaRows[0].currentPrice; // trade-aware base
+
     const params: SimulationParams = {
       patternType: profile.patternType as PatternType,
-      baseVolatility: isVibe ? 0.02 : profile.baseVolatility,
-      drift: isVibe ? 0.002 : profile.drift,
+      baseVolatility: profile.baseVolatility,
+      drift: profile.drift,
       meanReversionSpeed: profile.meanReversionSpeed,
       longTermMean: profile.longTermMean,
-      jumpFrequency: isVibe ? 0.03 : profile.jumpFrequency,
-      jumpMagnitude: isVibe ? 0.08 : profile.jumpMagnitude,
+      jumpFrequency: profile.jumpFrequency,
+      jumpMagnitude: profile.jumpMagnitude,
     };
 
-    const now = new Date();
-    const dayOfYear = Math.floor((now.getTime() - new Date(now.getFullYear(), 0, 0).getTime()) / (24 * 60 * 60 * 1000));
-    let { price: newPrice, volatility: newVolatility } = simulateNextPrice(profile.lastPrice, profile.lastVolatility, params, dayOfYear);
-    
-    if (isVibe && Math.random() < 0.6) {
-      newPrice *= 1 + (Math.random() * 0.005);
-      newPrice = Math.round(newPrice * 100) / 100;
+    const nowDate = new Date();
+    const dayOfYear = Math.floor((nowDate.getTime() - new Date(nowDate.getFullYear(), 0, 0).getTime()) / (24 * 60 * 60 * 1000));
+
+    let price = openBase;
+    let vol = profile.lastVolatility;
+    for (let t = 0; t < ticks; t++) {
+      const r = simulateNextPrice(price, vol, params, dayOfYear);
+      price = r.price;
+      vol = r.volatility;
     }
 
+    // Advance lastUpdated by the consumed span (not to `now`) so leftover time
+    // is preserved and repeated calls remain idempotent.
+    const newLastUpdated = new Date(lastMs + ticks * intervalMs);
     await db.update(stockSimProfiles).set({
-      lastPrice: newPrice,
-      lastVolatility: newVolatility,
-      lastUpdated: now,
+      lastPrice: price,
+      lastVolatility: vol,
+      lastUpdated: newLastUpdated,
     }).where(eq(stockSimProfiles.id, profile.id));
 
-    await db.update(stockMeta).set({ currentPrice: newPrice }).where(eq(stockMeta.marketId, profile.marketId));
+    await db.update(stockMeta).set({ currentPrice: price })
+      .where(eq(stockMeta.marketId, profile.marketId));
 
     const lastCandle = await db.select().from(stockCandles)
       .where(eq(stockCandles.marketId, profile.marketId))
@@ -207,10 +231,10 @@ export async function updateStockPrices(): Promise<void> {
 
     if (lastCandle.length > 0) {
       const lastCandleDate = new Date(lastCandle[0].timestamp);
-      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      
+      const todayStart = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate());
+
       if (lastCandleDate < todayStart) {
-        const ohlc = generateOHLC(profile.lastPrice, newPrice, newVolatility);
+        const ohlc = generateOHLC(openBase, price, vol);
         await db.insert(stockCandles).values({
           id: randomUUID(),
           marketId: profile.marketId,
@@ -220,9 +244,9 @@ export async function updateStockPrices(): Promise<void> {
       } else {
         const currentCandle = lastCandle[0];
         await db.update(stockCandles).set({
-          high: Math.max(currentCandle.high, newPrice),
-          low: Math.min(currentCandle.low, newPrice),
-          close: newPrice,
+          high: Math.max(currentCandle.high, price),
+          low: Math.min(currentCandle.low, price),
+          close: price,
           volume: currentCandle.volume + Math.floor(Math.random() * 100 + 50),
         }).where(eq(stockCandles.id, currentCandle.id));
       }
@@ -232,17 +256,23 @@ export async function updateStockPrices(): Promise<void> {
 
 let simulationInterval: ReturnType<typeof setInterval> | null = null;
 
+/**
+ * Local-dev convenience only. On Vercel (process.env.VERCEL) this is a no-op —
+ * serverless functions must not hold intervals; price advancement happens via
+ * storage.maybeTickStockPrices() on reads and/or a scheduled cron.
+ */
 export function startStockSimulation(intervalMinutes: number = 5): void {
+  if (process.env.VERCEL) return;
   if (simulationInterval) {
     clearInterval(simulationInterval);
   }
 
   console.log(`Starting stock price simulation (updates every ${intervalMinutes} minutes)`);
-  
-  updateStockPrices().catch(console.error);
+
+  maybeAdvanceStockPrices(intervalMinutes).catch(console.error);
 
   simulationInterval = setInterval(() => {
-    updateStockPrices().catch(console.error);
+    maybeAdvanceStockPrices(intervalMinutes).catch(console.error);
   }, intervalMinutes * 60 * 1000);
 }
 

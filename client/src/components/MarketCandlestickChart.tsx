@@ -24,11 +24,9 @@ interface CandleData {
   close: number;
   volume: number;
   isUp: boolean;
-  bodyTop: number;
-  bodyBottom: number;
-  bodyHeight: number;
-  wickTop: number;
-  wickBottom: number;
+  // [low, high] range drives the recharts Bar so the custom shape receives a
+  // rectangle spanning the full wick, mapped onto the shared price y-scale.
+  range: [number, number];
 }
 
 export function MarketCandlestickChart({ marketId, outcomeId, outcomeLabel }: MarketCandlestickChartProps) {
@@ -51,9 +49,7 @@ export function MarketCandlestickChart({ marketId, outcomeId, outcomeLabel }: Ma
 
   const chartData: CandleData[] = candles.map((candle) => {
     const isUp = candle.close >= candle.open;
-    const bodyTop = Math.max(candle.open, candle.close);
-    const bodyBottom = Math.min(candle.open, candle.close);
-    
+
     return {
       date: new Date(candle.timestamp).toLocaleDateString("en-US", {
         month: "short",
@@ -65,11 +61,7 @@ export function MarketCandlestickChart({ marketId, outcomeId, outcomeLabel }: Ma
       close: candle.close,
       volume: candle.volume,
       isUp,
-      bodyTop,
-      bodyBottom,
-      bodyHeight: Math.max(bodyTop - bodyBottom, 0.001),
-      wickTop: candle.high,
-      wickBottom: candle.low,
+      range: [candle.low, candle.high],
     };
   });
 
@@ -78,38 +70,43 @@ export function MarketCandlestickChart({ marketId, outcomeId, outcomeLabel }: Ma
 
   const CustomCandlestick = (props: any) => {
     const { x, y, width, height, payload } = props;
-    if (!payload) return null;
+    if (!payload || width == null || height == null) return null;
 
-    const isUp = payload.isUp;
-    const fillColor = isUp ? "#22c55e" : "#ef4444";
-    const wickColor = isUp ? "#22c55e" : "#ef4444";
-    
-    const candleWidth = Math.max(width * 0.7, 6);
-    const wickWidth = 1;
+    const { open, high, low, close } = payload as CandleData;
+    const isUp = close >= open;
+    const color = isUp ? "#22c55e" : "#ef4444";
+
+    // recharts maps the [low, high] range bar onto the price axis:
+    //   y            → pixel of `high`
+    //   y + height   → pixel of `low`
+    const span = high - low;
+    const priceToY = (price: number) =>
+      span > 0 ? y + ((high - price) / span) * height : y + height / 2;
+
+    const bodyTop = Math.max(open, close);
+    const bodyBottom = Math.min(open, close);
+    const bodyTopY = priceToY(bodyTop);
+    const bodyHeightPx = Math.max(priceToY(bodyBottom) - bodyTopY, 1);
+
+    const candleWidth = Math.max(width * 0.6, 3);
     const xCenter = x + width / 2;
-    
-    const yScale = height / (maxPrice - minPrice);
-    const candleBodyTop = y + (maxPrice - payload.bodyTop) * yScale;
-    const candleBodyHeight = Math.max(payload.bodyHeight * yScale, 1);
-    const wickTopY = y + (maxPrice - payload.high) * yScale;
-    const wickBottomY = y + (maxPrice - payload.low) * yScale;
 
     return (
       <g>
         <line
           x1={xCenter}
-          y1={wickTopY}
+          y1={y}
           x2={xCenter}
-          y2={wickBottomY}
-          stroke={wickColor}
-          strokeWidth={wickWidth}
+          y2={y + height}
+          stroke={color}
+          strokeWidth={1}
         />
         <rect
           x={xCenter - candleWidth / 2}
-          y={candleBodyTop}
+          y={bodyTopY}
           width={candleWidth}
-          height={candleBodyHeight}
-          fill={fillColor}
+          height={bodyHeightPx}
+          fill={color}
         />
       </g>
     );
@@ -163,7 +160,7 @@ export function MarketCandlestickChart({ marketId, outcomeId, outcomeLabel }: Ma
           />
           <Tooltip content={<CustomTooltip />} />
           <Bar
-            dataKey="bodyHeight"
+            dataKey="range"
             shape={<CustomCandlestick />}
             isAnimationActive={false}
           />

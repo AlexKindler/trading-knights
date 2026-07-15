@@ -33,13 +33,75 @@ import {
   polymarketLinks,
   emailVerificationTokens,
   passwordResetTokens,
+  resolutions,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { createHash } from "crypto";
 import { db } from "./db";
 import { eq, and, desc, sql, ne, isNull } from "drizzle-orm";
-import { generateHistoricalCandles, assignPatternType, startStockSimulation } from "./stockSimulator";
-import { stockSimProfiles } from "@shared/schema";
+import { maybeAdvanceStockPrices } from "./stockSimulator";
+
+/**
+ * Error thrown by trade/resolution transactions. routes.ts maps these to HTTP 400.
+ * Any other thrown error is treated as a 500.
+ */
+export type TradeErrorCode =
+  | "INVALID_QTY"
+  | "MARKET_CLOSED"
+  | "INSUFFICIENT_BALANCE"
+  | "INSUFFICIENT_SHARES"
+  | "OUTCOME_NOT_FOUND"
+  | "STOCK_NOT_FOUND";
+
+export class TradeError extends Error {
+  code: TradeErrorCode;
+  constructor(code: TradeErrorCode, message?: string) {
+    super(message || code);
+    this.name = "TradeError";
+    this.code = code;
+  }
+}
+
+export interface ExecuteTradeInput {
+  userId: string;
+  marketId: string;
+  outcomeId: string | null;
+  side: "BUY" | "SELL";
+  qty: number;
+}
+
+export interface ExecuteTradeResult {
+  trade: Trade;
+  user: User;
+  executedPrice: number;
+  priceAfter: number;
+}
+
+// Round money to whole cents.
+function round2(x: number): number {
+  return Math.round(x * 100) / 100;
+}
+
+// Round a probability/price to 4 decimals.
+function round4(x: number): number {
+  return Math.round(x * 10000) / 10000;
+}
+
+function clampProb(p: number): number {
+  return Math.max(0.01, Math.min(0.99, p));
+}
+
+// AMM tuning. Impact scales with quantity so large orders move the price more.
+const TAKER_FEE = 0.005; // 0.5% taker fee on every fill
+const PREDICTION_IMPACT_PER_SHARE = 0.0008; // probability units per share
+const PREDICTION_MAX_IMPACT = 0.45;
+const STOCK_IMPACT_PER_SHARE = 0.0005; // fraction of price per share
+const STOCK_MAX_IMPACT = 0.25;
+
+// In-memory throttle so maybeTickStockPrices() is cheap when called on every
+// read. The DB-level elapsed-time gate is the real correctness guard; this just
+// avoids re-querying sim profiles more than once a minute on a warm instance.
+let lastStockTickCheckAt = 0;
 
 export interface IStorage {
   // Users
@@ -144,23 +206,9 @@ export class MemStorage implements IStorage {
   }
 
   private seedData() {
-    // Create admin user
+    // Placeholder creator id for seeded markets. No password-bearing account is
+    // created here — admin access is granted only at registration (routes.ts).
     const adminId = randomUUID();
-    this.users.set(adminId, {
-      id: adminId,
-      email: "admin@menloschool.org",
-      password: this.hashPassword("admin123"),
-      displayName: "Admin",
-      grade: "Faculty",
-      role: "ADMIN",
-      status: "VERIFIED",
-      emailVerifiedAt: new Date(),
-      balance: 10000,
-      disclaimerAcceptedAt: new Date(),
-      lastBankruptcyReset: null,
-      hasMkAiAccess: false,
-      createdAt: new Date(),
-    });
 
     // Create prediction markets - Club-based and school events
     const predictionMarkets = [
@@ -471,19 +519,11 @@ export class MemStorage implements IStorage {
     const user = await this.getUser(record.userId);
     if (!user) return null;
 
-    // Update user to verified and credit starting balance
+    // Mark verified only. Starting credit is granted once at registration
+    // (routes.ts), so verification must NOT touch the balance or wipe gains.
     const updatedUser = await this.updateUser(user.id, {
       status: "VERIFIED",
       emailVerifiedAt: new Date(),
-      balance: 1000,
-    });
-
-    // Log balance event
-    await this.logBalanceEvent({
-      userId: user.id,
-      type: "STARTING_CREDIT",
-      amount: 1000,
-      note: "Initial balance upon email verification",
     });
 
     this.verificationTokens.delete(tokenHash);
@@ -936,10 +976,6 @@ export class MemStorage implements IStorage {
   }
 }
 
-function hashPassword(password: string): string {
-  return createHash("sha256").update(password).digest("hex");
-}
-
 export class DbStorage implements IStorage {
   async getUser(id: string): Promise<User | undefined> {
     const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
@@ -952,34 +988,26 @@ export class DbStorage implements IStorage {
   }
 
   async createUser(user: InsertUser & { id?: string }): Promise<User> {
+    // Creates ONLY the user row. It does NOT grant a starting balance and does
+    // NOT log any balance event — routes.ts grants the $1000 STARTING_CREDIT
+    // exactly once at registration (this removes the previous double-credit).
+    // The password is stored as provided: routes.ts hashes it before calling.
     const id = user.id || randomUUID();
-    const DEVELOPER_EMAILS = [
-      "alex.kindler@menloschool.org",
-      "lincoln.bott@menloschool.org",
-    ];
-    const isDeveloper = DEVELOPER_EMAILS.includes(user.email.toLowerCase());
-    
+
     const result = await db.insert(users).values({
       id,
       email: user.email,
-      password: hashPassword(user.password),
+      password: user.password,
       displayName: user.displayName,
       grade: user.grade || null,
       role: "STUDENT",
-      status: "VERIFIED",
-      emailVerifiedAt: new Date(),
-      balance: 1000,
+      status: "PENDING_VERIFICATION",
+      emailVerifiedAt: null,
+      balance: 0,
       disclaimerAcceptedAt: null,
       lastBankruptcyReset: null,
-      hasMkAiAccess: isDeveloper,
+      hasMkAiAccess: false,
     }).returning();
-
-    await this.logBalanceEvent({
-      userId: id,
-      type: "STARTING_CREDIT",
-      amount: 1000,
-      note: "Initial balance upon registration",
-    });
 
     return result[0];
   }
@@ -991,6 +1019,363 @@ export class DbStorage implements IStorage {
 
   async getAllUsers(): Promise<User[]> {
     return db.select().from(users);
+  }
+
+  /**
+   * Execute a single trade inside ONE database transaction (CONTRACT §1).
+   * The AMM applies price impact BEFORE the fill, fills on the adverse side, and
+   * charges a taker fee, so an immediate buy -> sell round trip is strictly
+   * loss-making. All money is rounded to cents.
+   */
+  async executeTrade(input: ExecuteTradeInput): Promise<ExecuteTradeResult> {
+    const { userId, marketId, side } = input;
+    const qty = input.qty;
+
+    // Validate quantity: integer in [1, 1000].
+    if (!Number.isInteger(qty) || qty < 1 || qty > 1000) {
+      throw new TradeError("INVALID_QTY", "Quantity must be a whole number between 1 and 1000");
+    }
+
+    return db.transaction(async (tx) => {
+      // Re-read market fresh inside the transaction.
+      const marketRows = await tx.select().from(markets).where(eq(markets.id, marketId)).limit(1);
+      const market = marketRows[0];
+      const now = new Date();
+      if (
+        !market ||
+        market.status !== "OPEN" ||
+        (market.closeAt && new Date(market.closeAt).getTime() <= now.getTime())
+      ) {
+        throw new TradeError("MARKET_CLOSED", "Market is not open for trading");
+      }
+
+      // Lock the user row FOR UPDATE so all of this user's concurrent trades
+      // serialize: the read-modify-write of balance (and their per-user
+      // positions) cannot interleave, which closes the double-spend / share
+      // duplication window under READ COMMITTED.
+      const userRows = await tx.select().from(users).where(eq(users.id, userId)).for("update").limit(1);
+      const user = userRows[0];
+      if (!user) {
+        // Callers authenticate first; treat a missing user as a hard error.
+        throw new Error("User not found");
+      }
+
+      let executedPrice: number;
+      let priceAfter: number;
+      let cashDelta: number; // +proceeds on SELL, -cost on BUY
+      const outcomeId: string | null =
+        market.type === "PREDICTION" ? input.outcomeId : null;
+
+      if (market.type === "PREDICTION") {
+        if (!outcomeId) {
+          throw new TradeError("OUTCOME_NOT_FOUND", "Outcome is required for prediction markets");
+        }
+        const outcomeRows = await tx.select().from(outcomes)
+          .where(and(eq(outcomes.id, outcomeId), eq(outcomes.marketId, marketId)))
+          .limit(1);
+        const outcome = outcomeRows[0];
+        if (!outcome) {
+          throw new TradeError("OUTCOME_NOT_FOUND", "Outcome not found");
+        }
+
+        const p = outcome.currentPrice;
+        const impact = Math.min(PREDICTION_IMPACT_PER_SHARE * qty, PREDICTION_MAX_IMPACT);
+        // Move the price first, then fill on the adverse (post-impact) side.
+        priceAfter = side === "BUY" ? clampProb(p + impact) : clampProb(p - impact);
+        executedPrice = priceAfter;
+        const notional = qty * executedPrice;
+
+        // Position (fresh, in-txn).
+        const posRows = await tx.select().from(positions)
+          .where(and(
+            eq(positions.userId, userId),
+            eq(positions.marketId, marketId),
+            eq(positions.outcomeId, outcomeId),
+          )).limit(1);
+        const existing = posRows[0];
+
+        if (side === "BUY") {
+          const cost = round2(notional * (1 + TAKER_FEE));
+          if (user.balance < cost) {
+            throw new TradeError("INSUFFICIENT_BALANCE", "Insufficient balance");
+          }
+          cashDelta = -cost;
+          const newQty = (existing?.qty ?? 0) + qty;
+          const newAvgCost = existing
+            ? round2((existing.qty * existing.avgCost + cost) / newQty)
+            : round2(cost / qty);
+          await this.writePosition(tx, existing?.id, {
+            userId, marketId, outcomeId, qty: newQty, avgCost: newAvgCost,
+          });
+        } else {
+          if (!existing || existing.qty < qty) {
+            throw new TradeError("INSUFFICIENT_SHARES", "Insufficient shares");
+          }
+          const proceeds = round2(notional * (1 - TAKER_FEE));
+          cashDelta = proceeds;
+          const newQty = existing.qty - qty;
+          await this.writePosition(tx, existing.id, {
+            userId, marketId, outcomeId, qty: newQty, avgCost: existing.avgCost,
+          });
+        }
+
+        // Update the traded outcome and keep a binary market summing to 1.
+        await tx.update(outcomes).set({ currentPrice: round4(priceAfter) })
+          .where(eq(outcomes.id, outcomeId));
+        const others = await tx.select().from(outcomes)
+          .where(and(eq(outcomes.marketId, marketId), ne(outcomes.id, outcomeId)));
+        if (others.length === 1) {
+          await tx.update(outcomes).set({ currentPrice: round4(1 - priceAfter) })
+            .where(eq(outcomes.id, others[0].id));
+        }
+      } else if (market.type === "STOCK") {
+        const metaRows = await tx.select().from(stockMetaTable)
+          .where(eq(stockMetaTable.marketId, marketId)).limit(1);
+        const meta = metaRows[0];
+        if (!meta) {
+          throw new TradeError("STOCK_NOT_FOUND", "Stock not found");
+        }
+
+        const p = meta.currentPrice;
+        const pctImpact = Math.min(STOCK_IMPACT_PER_SHARE * qty, STOCK_MAX_IMPACT);
+        priceAfter = side === "BUY"
+          ? round2(p * (1 + pctImpact))
+          : Math.max(0.01, round2(p * (1 - pctImpact)));
+        executedPrice = priceAfter;
+        const notional = qty * executedPrice;
+
+        const posRows = await tx.select().from(positions)
+          .where(and(
+            eq(positions.userId, userId),
+            eq(positions.marketId, marketId),
+            isNull(positions.outcomeId),
+          )).limit(1);
+        const existing = posRows[0];
+
+        if (side === "BUY") {
+          const cost = round2(notional * (1 + TAKER_FEE));
+          if (user.balance < cost) {
+            throw new TradeError("INSUFFICIENT_BALANCE", "Insufficient balance");
+          }
+          cashDelta = -cost;
+          const newQty = (existing?.qty ?? 0) + qty;
+          const newAvgCost = existing
+            ? round2((existing.qty * existing.avgCost + cost) / newQty)
+            : round2(cost / qty);
+          await this.writePosition(tx, existing?.id, {
+            userId, marketId, outcomeId: null, qty: newQty, avgCost: newAvgCost,
+          });
+        } else {
+          if (!existing || existing.qty < qty) {
+            throw new TradeError("INSUFFICIENT_SHARES", "Insufficient shares");
+          }
+          const proceeds = round2(notional * (1 - TAKER_FEE));
+          cashDelta = proceeds;
+          const newQty = existing.qty - qty;
+          await this.writePosition(tx, existing.id, {
+            userId, marketId, outcomeId: null, qty: newQty, avgCost: existing.avgCost,
+          });
+        }
+
+        await tx.update(stockMetaTable).set({ currentPrice: Math.max(0.01, priceAfter) })
+          .where(eq(stockMetaTable.marketId, marketId));
+      } else {
+        throw new TradeError("MARKET_CLOSED", "Invalid market type");
+      }
+
+      // Record the trade.
+      const tradeRows = await tx.insert(trades).values({
+        id: randomUUID(),
+        userId,
+        marketId,
+        outcomeId,
+        side,
+        qty,
+        price: round2(executedPrice),
+        total: round2(Math.abs(cashDelta)),
+      }).returning();
+
+      // Update balance and log exactly one TRADE ledger event.
+      const newBalance = round2(user.balance + cashDelta);
+      const updatedRows = await tx.update(users).set({ balance: newBalance })
+        .where(eq(users.id, userId)).returning();
+
+      await tx.insert(balanceEvents).values({
+        id: randomUUID(),
+        userId,
+        type: "TRADE",
+        amount: round2(cashDelta),
+        note: `${side} ${qty} @ $${round2(executedPrice).toFixed(2)}`,
+      });
+
+      return {
+        trade: tradeRows[0],
+        user: updatedRows[0],
+        executedPrice: round2(executedPrice),
+        priceAfter,
+      };
+    });
+  }
+
+  // Atomic position write: UPDATE when the row exists, otherwise INSERT with an
+  // ON CONFLICT fallback on the unique index (userId, marketId, outcomeKey) so
+  // concurrent inserts never create duplicate rows. outcomeKey is a generated
+  // STORED column = coalesce(outcome_id, '') — the ON CONFLICT target must be
+  // outcomeKey (not the nullable outcomeId, whose NULLs are treated as distinct).
+  private async writePosition(
+    tx: any,
+    existingId: string | undefined,
+    values: { userId: string; marketId: string; outcomeId: string | null; qty: number; avgCost: number },
+  ): Promise<void> {
+    if (existingId) {
+      await tx.update(positions)
+        .set({ qty: values.qty, avgCost: values.avgCost })
+        .where(eq(positions.id, existingId));
+      return;
+    }
+    await tx.insert(positions)
+      .values({ id: randomUUID(), ...values })
+      .onConflictDoUpdate({
+        target: [positions.userId, positions.marketId, positions.outcomeKey],
+        set: { qty: values.qty, avgCost: values.avgCost },
+      });
+  }
+
+  /**
+   * Resolve a prediction market inside one transaction (CONTRACT §2).
+   * Idempotent: does nothing if the market is already RESOLVED. Never double-pays.
+   */
+  async resolveMarket(
+    marketId: string,
+    opts: { winningOutcomeId?: string; voidRefund?: boolean },
+  ): Promise<void> {
+    await db.transaction(async (tx) => {
+      const marketRows = await tx.select().from(markets).where(eq(markets.id, marketId)).limit(1);
+      const market = marketRows[0];
+      if (!market) return;
+      if (market.status === "RESOLVED") return; // idempotent, never double-pay
+
+      // Guard against a concurrent resolution via the resolutions unique index.
+      const existingResolution = await tx.select().from(resolutions)
+        .where(eq(resolutions.marketId, marketId)).limit(1);
+      if (existingResolution.length > 0) return;
+
+      const marketOutcomes = await tx.select().from(outcomes)
+        .where(eq(outcomes.marketId, marketId));
+      const heldPositions = await tx.select().from(positions)
+        .where(and(eq(positions.marketId, marketId), sql`${positions.qty} > 0`));
+
+      const voidRefund = !!opts.voidRefund;
+      const winningOutcomeId = opts.winningOutcomeId;
+
+      for (const pos of heldPositions) {
+        let payout = 0;
+        if (voidRefund) {
+          payout = round2(pos.qty * pos.avgCost);
+        } else if (pos.outcomeId && pos.outcomeId === winningOutcomeId) {
+          payout = round2(pos.qty * 1.0);
+        }
+        if (payout <= 0) continue;
+
+        const userRows = await tx.select().from(users).where(eq(users.id, pos.userId)).limit(1);
+        const holder = userRows[0];
+        if (!holder) continue;
+
+        await tx.update(users).set({ balance: round2(holder.balance + payout) })
+          .where(eq(users.id, pos.userId));
+        await tx.insert(balanceEvents).values({
+          id: randomUUID(),
+          userId: pos.userId,
+          type: "RESOLUTION",
+          amount: payout,
+          note: voidRefund
+            ? `Void refund for market ${marketId}`
+            : `Payout for winning outcome ${winningOutcomeId}`,
+        });
+      }
+
+      // Settle outcome prices: winner -> 1, losers -> 0 (unchanged on void).
+      if (!voidRefund && winningOutcomeId) {
+        for (const o of marketOutcomes) {
+          await tx.update(outcomes)
+            .set({ currentPrice: o.id === winningOutcomeId ? 1 : 0 })
+            .where(eq(outcomes.id, o.id));
+        }
+      }
+
+      await tx.update(markets).set({ status: "RESOLVED" }).where(eq(markets.id, marketId));
+
+      await tx.insert(resolutions).values({
+        id: randomUUID(),
+        marketId,
+        resolvedBy: market.createdBy,
+        winningOutcomeId: winningOutcomeId ?? null,
+        voidRefund: voidRefund ?? false,
+        note: voidRefund ? "VOID_REFUND" : null,
+      });
+    });
+  }
+
+  /**
+   * Reset a user to $100 only if total equity (cash + mark-to-market position
+   * value) has fallen to zero or below and the 24h cooldown has elapsed
+   * (CONTRACT §3). Returns the fresh user either way.
+   */
+  async maybeBankruptcyReset(userId: string): Promise<User> {
+    return db.transaction(async (tx) => {
+      const userRows = await tx.select().from(users).where(eq(users.id, userId)).limit(1);
+      const user = userRows[0];
+      if (!user) throw new Error("User not found");
+
+      const heldPositions = await tx.select().from(positions)
+        .where(and(eq(positions.userId, userId), sql`${positions.qty} > 0`));
+
+      let positionsValue = 0;
+      for (const pos of heldPositions) {
+        if (pos.outcomeId) {
+          const oRows = await tx.select().from(outcomes).where(eq(outcomes.id, pos.outcomeId)).limit(1);
+          if (oRows[0]) positionsValue += pos.qty * oRows[0].currentPrice;
+        } else {
+          const mRows = await tx.select().from(stockMetaTable)
+            .where(eq(stockMetaTable.marketId, pos.marketId)).limit(1);
+          if (mRows[0]) positionsValue += pos.qty * mRows[0].currentPrice;
+        }
+      }
+
+      const equity = user.balance + positionsValue;
+      const cooldownOk = !user.lastBankruptcyReset ||
+        Date.now() - new Date(user.lastBankruptcyReset).getTime() > 24 * 60 * 60 * 1000;
+
+      if (equity > 0 || !cooldownOk) {
+        return user;
+      }
+
+      const credit = round2(100 - user.balance);
+      const rows = await tx.update(users)
+        .set({ balance: 100, lastBankruptcyReset: new Date() })
+        .where(eq(users.id, userId))
+        .returning();
+      await tx.insert(balanceEvents).values({
+        id: randomUUID(),
+        userId,
+        type: "BANKRUPTCY_RESET",
+        amount: credit,
+        note: "Automatic bankruptcy reset",
+      });
+      return rows[0];
+    });
+  }
+
+  /**
+   * Advance simulated stock prices based on elapsed time (CONTRACT §9).
+   * Idempotent and cheap: safe to call on every stock read. A no-op when less
+   * than the tick interval has passed since the last persisted update.
+   */
+  async maybeTickStockPrices(): Promise<void> {
+    const now = Date.now();
+    if (now - lastStockTickCheckAt < 60 * 1000) return;
+    lastStockTickCheckAt = now;
+    await maybeAdvanceStockPrices(5);
   }
 
   async createVerificationToken(userId: string): Promise<string> {
@@ -1019,22 +1404,30 @@ export class DbStorage implements IStorage {
     const user = await this.getUser(record.userId);
     if (!user) return null;
 
-    const updatedUser = await this.updateUser(user.id, {
-      status: "VERIFIED",
-      emailVerifiedAt: new Date(),
-      balance: 1000,
-    });
+    // Atomic single-use redemption: only the transaction that flips usedAt from
+    // NULL wins. This marks the user verified WITHOUT resetting the balance
+    // (resetting to 1000 would wipe any gains). Starting credit is granted once
+    // at registration in routes.ts.
+    const updatedUser = await db.transaction(async (tx) => {
+      const claimed = await tx.update(emailVerificationTokens)
+        .set({ usedAt: new Date() })
+        .where(and(
+          eq(emailVerificationTokens.tokenHash, tokenHash),
+          isNull(emailVerificationTokens.usedAt),
+        ))
+        .returning();
 
-    await this.logBalanceEvent({
-      userId: user.id,
-      type: "STARTING_CREDIT",
-      amount: 1000,
-      note: "Initial balance upon email verification",
-    });
+      if (claimed.length === 0) {
+        // Already redeemed by a concurrent request.
+        return undefined;
+      }
 
-    await db.update(emailVerificationTokens)
-      .set({ usedAt: new Date() })
-      .where(eq(emailVerificationTokens.tokenHash, tokenHash));
+      const rows = await tx.update(users)
+        .set({ status: "VERIFIED", emailVerifiedAt: new Date() })
+        .where(eq(users.id, user.id))
+        .returning();
+      return rows[0];
+    });
 
     return updatedUser || null;
   }
@@ -1091,16 +1484,20 @@ export class DbStorage implements IStorage {
   }
 
   async getMarkets(type?: string): Promise<MarketWithDetails[]> {
+    // Advance simulated prices (idempotent, self-throttled) before reading.
+    await this.maybeTickStockPrices();
+
     let query = db.select().from(markets)
       .where(ne(markets.status, "HIDDEN"))
       .orderBy(desc(markets.createdAt));
-    
+
     const result = await query;
     const filtered = type ? result.filter(m => m.type === type) : result;
     return Promise.all(filtered.map((m) => this.enrichMarket(m)));
   }
 
   async getMarket(id: string): Promise<MarketWithDetails | undefined> {
+    await this.maybeTickStockPrices();
     const result = await db.select().from(markets).where(eq(markets.id, id)).limit(1);
     if (!result[0]) return undefined;
     return this.enrichMarket(result[0]);
@@ -1270,56 +1667,102 @@ export class DbStorage implements IStorage {
     return result[0];
   }
 
-  async getLeaderboard(timeFilter?: string): Promise<LeaderboardEntry[]> {
+  async getLeaderboard(timeFilter?: string, limit: number = 100): Promise<LeaderboardEntry[]> {
+    // Refresh stock prices once before ranking.
+    await this.maybeTickStockPrices();
+
     const allUsers = await db.select().from(users)
       .where(and(
         eq(users.status, "VERIFIED"),
         ne(users.role, "ADMIN")
       ));
 
-    const entries: LeaderboardEntry[] = await Promise.all(
-      allUsers.map(async (user) => {
-        const userPositions = await this.getPositionsByUser(user.id);
-        let positionsValue = 0;
+    if (allUsers.length === 0) return [];
 
-        for (const pos of userPositions) {
-          if (pos.outcomeId) {
-            const outcomeResult = await db.select().from(outcomes)
-              .where(eq(outcomes.id, pos.outcomeId)).limit(1);
-            if (outcomeResult[0]) {
-              positionsValue += pos.qty * outcomeResult[0].currentPrice;
-            }
-          } else {
-            const stockMetaResult = await db.select().from(stockMetaTable)
-              .where(eq(stockMetaTable.marketId, pos.marketId)).limit(1);
-            if (stockMetaResult[0]) {
-              positionsValue += pos.qty * stockMetaResult[0].currentPrice;
-            }
-          }
+    // Batch-load everything up front to avoid N+1 queries.
+    const [allPositions, allOutcomes, allStockMeta, allEvents] = await Promise.all([
+      db.select().from(positions).where(sql`${positions.qty} > 0`),
+      db.select().from(outcomes),
+      db.select().from(stockMetaTable),
+      db.select().from(balanceEvents),
+    ]);
+
+    const outcomePrice = new Map(allOutcomes.map((o) => [o.id, o.currentPrice]));
+    const stockPrice = new Map(allStockMeta.map((s) => [s.marketId, s.currentPrice]));
+
+    const positionsByUser = new Map<string, Position[]>();
+    for (const pos of allPositions) {
+      const list = positionsByUser.get(pos.userId) || [];
+      list.push(pos);
+      positionsByUser.set(pos.userId, list);
+    }
+
+    // Window for the selected time filter.
+    const windowMs = timeFilter === "weekly"
+      ? 7 * 24 * 60 * 60 * 1000
+      : timeFilter === "monthly"
+        ? 30 * 24 * 60 * 60 * 1000
+        : null;
+    const windowStart = windowMs ? Date.now() - windowMs : null;
+
+    // Per-user baselines (net deposits) and windowed realized activity.
+    const DEPOSIT_TYPES = new Set(["STARTING_CREDIT", "BANKRUPTCY_RESET", "ADMIN_ADJUST"]);
+    const ACTIVITY_TYPES = new Set(["TRADE", "RESOLUTION"]);
+    const baselineByUser = new Map<string, number>();
+    const periodPnLByUser = new Map<string, number>();
+    for (const ev of allEvents) {
+      if (DEPOSIT_TYPES.has(ev.type)) {
+        baselineByUser.set(ev.userId, (baselineByUser.get(ev.userId) || 0) + ev.amount);
+      }
+      if (windowStart && ACTIVITY_TYPES.has(ev.type) &&
+          new Date(ev.createdAt).getTime() >= windowStart) {
+        periodPnLByUser.set(ev.userId, (periodPnLByUser.get(ev.userId) || 0) + ev.amount);
+      }
+    }
+
+    const entries: LeaderboardEntry[] = allUsers.map((user) => {
+      const userPositions = positionsByUser.get(user.id) || [];
+      let positionsValue = 0;
+      for (const pos of userPositions) {
+        if (pos.outcomeId) {
+          positionsValue += pos.qty * (outcomePrice.get(pos.outcomeId) ?? 0);
+        } else {
+          positionsValue += pos.qty * (stockPrice.get(pos.marketId) ?? 0);
         }
+      }
 
-        const totalValue = user.balance + positionsValue;
-        const changePercent = ((totalValue - 1000) / 1000) * 100;
+      const totalValue = round2(user.balance + positionsValue);
+      // Baseline = actual net deposits (never a hardcoded $1000).
+      const baseline = baselineByUser.get(user.id) || 1000;
+      // changePercent is the all-time return on equity: (current equity - net
+      // deposits) / net deposits. We deliberately do NOT derive a windowed
+      // figure from raw TRADE cash-flow — a BUY's negative cash delta is not a
+      // loss (it becomes position value), so summing cash-flow makes holders
+      // look like they lost money. A correct windowed return needs a
+      // start-of-window equity snapshot we don't persist yet, so weekly/monthly
+      // rank on the same equity return (approximate) rather than show wrong
+      // negatives.
+      void windowStart; void periodPnLByUser;
+      const changePercent = baseline > 0 ? ((totalValue - baseline) / baseline) * 100 : 0;
 
-        return {
-          rank: 0,
-          userId: user.id,
-          displayName: user.displayName,
-          grade: user.grade || undefined,
-          totalValue,
-          cashBalance: user.balance,
-          positionsValue,
-          changePercent,
-        };
-      })
-    );
+      return {
+        rank: 0,
+        userId: user.id,
+        displayName: user.displayName,
+        grade: user.grade || undefined,
+        totalValue,
+        cashBalance: user.balance,
+        positionsValue: round2(positionsValue),
+        changePercent,
+      };
+    });
 
     entries.sort((a, b) => b.totalValue - a.totalValue);
     entries.forEach((entry, index) => {
       entry.rank = index + 1;
     });
 
-    return entries;
+    return entries.slice(0, limit);
   }
 
   async getPortfolio(userId: string): Promise<PortfolioSummary> {
@@ -1373,13 +1816,22 @@ export class DbStorage implements IStorage {
     );
 
     const positionsValue = enrichedPositions.reduce((sum, p) => sum + p.currentValue, 0);
-    const totalValue = user.balance + positionsValue;
-    const totalPnL = totalValue - 1000;
+    const totalValue = round2(user.balance + positionsValue);
+
+    // P&L is measured against actual net deposits (starting credit + resets +
+    // admin adjustments), not a hardcoded $1000 baseline.
+    const depositEvents = await db.select().from(balanceEvents)
+      .where(eq(balanceEvents.userId, userId));
+    const DEPOSIT_TYPES = new Set(["STARTING_CREDIT", "BANKRUPTCY_RESET", "ADMIN_ADJUST"]);
+    const baseline = depositEvents
+      .filter((ev) => DEPOSIT_TYPES.has(ev.type))
+      .reduce((sum, ev) => sum + ev.amount, 0) || 1000;
+    const totalPnL = round2(totalValue - baseline);
 
     return {
       totalValue,
       cashBalance: user.balance,
-      positionsValue,
+      positionsValue: round2(positionsValue),
       totalPnL,
       positions: enrichedPositions,
       recentTrades: userTrades.slice(0, 20),
@@ -1387,12 +1839,13 @@ export class DbStorage implements IStorage {
   }
 
   async getStockCandles(marketId: string, limit: number = 100): Promise<StockCandle[]> {
+    await this.maybeTickStockPrices();
     const result = await db.select().from(stockCandles)
       .where(eq(stockCandles.marketId, marketId))
       .orderBy(desc(stockCandles.timestamp))
       .limit(limit);
-    
-    return result.sort((a, b) => 
+
+    return result.sort((a, b) =>
       new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
     );
   }
@@ -1534,175 +1987,10 @@ export class DbStorage implements IStorage {
   }
 }
 
-// Database seeding function - runs once if database is empty
-async function seedDatabase(): Promise<void> {
-  const existingUsers = await db.select().from(users).limit(1);
-  if (existingUsers.length > 0) {
-    console.log("Database already seeded, skipping...");
-    return;
-  }
-
-  console.log("Seeding database with initial data...");
-
-  // Create admin user
-  const adminId = randomUUID();
-  await db.insert(users).values({
-    id: adminId,
-    email: "admin@menloschool.org",
-    password: hashPassword("admin123"),
-    displayName: "Admin",
-    grade: "Faculty",
-    role: "ADMIN",
-    status: "VERIFIED",
-    emailVerifiedAt: new Date(),
-    balance: 10000,
-    disclaimerAcceptedAt: new Date(),
-    hasMkAiAccess: false,
-  });
-
-  // Create prediction markets
-  const predictionMarketsData = [
-    { title: "Will Menlo Robotics win at VEX States?", description: "Resolves YES if Menlo Robotics Club places 1st at the VEX State Championship.", category: "Clubs", closeAt: new Date(Date.now() + 45 * 24 * 60 * 60 * 1000), resolutionRule: "Based on official VEX competition results" },
-    { title: "Will Drama Club's spring show sell out?", description: "Resolves YES if all tickets for Drama Club's spring production are sold.", category: "Clubs", closeAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), resolutionRule: "Based on ticket sales records" },
-    { title: "Will Model UN win Best Delegation?", description: "Resolves YES if Menlo Model UN wins Best Delegation at the next major conference.", category: "Clubs", closeAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000), resolutionRule: "Based on official MUN awards" },
-    { title: "Will Spirit Week have 80%+ participation?", description: "Resolves YES if more than 80% of students participate in at least one Spirit Week event.", category: "Events", closeAt: new Date(Date.now() + 21 * 24 * 60 * 60 * 1000), resolutionRule: "Based on attendance records" },
-    { title: "Will the average AP Calc score be above 4.0?", description: "Resolves YES if the class average on AP Calculus exam exceeds 4.0.", category: "Academics", closeAt: new Date(Date.now() + 120 * 24 * 60 * 60 * 1000), resolutionRule: "Based on College Board results" },
-  ];
-
-  for (const m of predictionMarketsData) {
-    const marketId = randomUUID();
-    await db.insert(markets).values({
-      id: marketId,
-      type: "PREDICTION",
-      title: m.title,
-      description: m.description,
-      category: m.category,
-      status: "OPEN",
-      source: "INTERNAL",
-      closeAt: m.closeAt,
-      resolveAt: new Date(m.closeAt.getTime() + 7 * 24 * 60 * 60 * 1000),
-      resolutionRule: m.resolutionRule,
-      createdBy: adminId,
-    });
-
-    const yesPrice = 0.3 + Math.random() * 0.4;
-    await db.insert(outcomes).values([
-      { id: randomUUID(), marketId, label: "YES", currentPrice: yesPrice },
-      { id: randomUUID(), marketId, label: "NO", currentPrice: 1 - yesPrice },
-    ]);
-  }
-
-  // Create stock markets for all 56 clubs with different patterns
-  const stocksData = [
-    { ticker: "ANIME", name: "Anime Club", price: 28, description: "Watch anime with friends and have snacks." },
-    { ticker: "ROBOT", name: "Menlo Robotics Club", price: 48, description: "Have fun while tinkering and learning about engineering." },
-    { ticker: "MUN", name: "Model UN", price: 44, description: "Exercise vital skills like public speaking and debate." },
-    { ticker: "DRAMA", name: "Drama Club", price: 36, description: "Act, create, and help bring Menlo shows to life." },
-    { ticker: "DEBAT", name: "Parliamentary Debate", price: 43, description: "Part of a debate team ranked top 20 in the country." },
-    { ticker: "TEDX", name: "TEDx Menlo", price: 45, description: "Be part of the production team for TEDx event." },
-    { ticker: "ENGR", name: "Engineering Club", price: 45, description: "Build an electric go-cart." },
-    { ticker: "GWC", name: "Girls Who Code", price: 38, description: "A fun place for girls who love STEM." },
-    { ticker: "BIZ", name: "Business & Entrepreneurship Club", price: 42, description: "Learn how to start a business." },
-    { ticker: "CLMT", name: "Climate Coalition", price: 38, description: "Focus on climate action and advocacy." },
-    { ticker: "ENVIR", name: "Environmental Action", price: 35, description: "Take action on environmental issues at school." },
-    { ticker: "SPCH", name: "Speech & Debate", price: 41, description: "Compete in public speaking and argumentation." },
-    { ticker: "MATH", name: "Math Club", price: 39, description: "Solve challenging problems and compete in math olympiads." },
-    { ticker: "CHEM", name: "Chemistry Club", price: 33, description: "Explore chemistry through experiments and competitions." },
-    { ticker: "PHYS", name: "Physics Club", price: 34, description: "Discover the laws of the universe through hands-on projects." },
-    { ticker: "BIO", name: "Biology Club", price: 32, description: "Study life sciences and environmental biology." },
-    { ticker: "ASTRO", name: "Astronomy Club", price: 29, description: "Observe the night sky and learn about space." },
-    { ticker: "CHESS", name: "Chess Club", price: 31, description: "Improve your strategic thinking through chess." },
-    { ticker: "MUSIC", name: "Music Production Club", price: 37, description: "Create and produce original music." },
-    { ticker: "PHOTO", name: "Photography Club", price: 30, description: "Capture moments and improve your photography skills." },
-    { ticker: "FILM", name: "Film Club", price: 40, description: "Make short films and explore cinematography." },
-    { ticker: "ART", name: "Art Club", price: 27, description: "Express yourself through various art mediums." },
-    { ticker: "WRITE", name: "Creative Writing Club", price: 26, description: "Write poetry, stories, and creative pieces." },
-    { ticker: "NEWS", name: "School Newspaper", price: 35, description: "Report on school events and student life." },
-    { ticker: "YRBK", name: "Yearbook", price: 34, description: "Document the school year in photos and memories." },
-    { ticker: "CULT", name: "Cultural Club", price: 33, description: "Celebrate diversity and cultural exchange." },
-    { ticker: "SPAN", name: "Spanish Club", price: 28, description: "Practice Spanish and explore Hispanic culture." },
-    { ticker: "FRNCH", name: "French Club", price: 27, description: "Learn French language and culture." },
-    { ticker: "CHINA", name: "Chinese Club", price: 31, description: "Explore Chinese language and traditions." },
-    { ticker: "KOREA", name: "Korean Club", price: 32, description: "Learn Korean language and K-culture." },
-    { ticker: "JSA", name: "Junior State of America", price: 42, description: "Engage in political debate and civic education." },
-    { ticker: "MOCK", name: "Mock Trial", price: 44, description: "Argue cases in simulated courtroom competitions." },
-    { ticker: "ECON", name: "Economics Club", price: 40, description: "Study markets and economic principles." },
-    { ticker: "INVEST", name: "Investment Club", price: 46, description: "Learn about stocks and portfolio management." },
-    { ticker: "CODE", name: "Coding Club", price: 47, description: "Learn programming and build software projects." },
-    { ticker: "CYBER", name: "Cybersecurity Club", price: 43, description: "Learn about digital security and ethical hacking." },
-    { ticker: "AI", name: "AI & Machine Learning", price: 50, description: "Explore artificial intelligence and ML projects." },
-    { ticker: "GAME", name: "Game Development Club", price: 38, description: "Design and create video games." },
-    { ticker: "ESPORT", name: "Esports Club", price: 35, description: "Compete in competitive gaming tournaments." },
-    { ticker: "COOK", name: "Cooking Club", price: 29, description: "Learn culinary skills and try new recipes." },
-    { ticker: "GARDEN", name: "Garden Club", price: 25, description: "Grow plants and maintain the school garden." },
-    { ticker: "YOGA", name: "Yoga & Wellness Club", price: 28, description: "Practice mindfulness and physical wellness." },
-    { ticker: "RUN", name: "Running Club", price: 26, description: "Train for races and enjoy group runs." },
-    { ticker: "HIKE", name: "Hiking Club", price: 27, description: "Explore local trails and nature." },
-    { ticker: "VOLUN", name: "Community Service", price: 36, description: "Give back through volunteer opportunities." },
-    { ticker: "TUTOR", name: "Peer Tutoring", price: 33, description: "Help fellow students succeed academically." },
-    { ticker: "LEAD", name: "Leadership Council", price: 41, description: "Develop leadership skills and plan events." },
-    { ticker: "STUCO", name: "Student Council", price: 45, description: "Represent student voice in school governance." },
-    { ticker: "SPIRIT", name: "Spirit Committee", price: 34, description: "Boost school spirit and plan pep rallies." },
-    { ticker: "DANCE", name: "Dance Team", price: 37, description: "Perform at games and school events." },
-    { ticker: "ACAP", name: "A Cappella", price: 39, description: "Sing in harmony without instruments." },
-    { ticker: "ORCH", name: "Orchestra", price: 38, description: "Play classical music in the school orchestra." },
-    { ticker: "BAND", name: "Jazz Band", price: 36, description: "Perform jazz and contemporary music." },
-    { ticker: "CHOIR", name: "Choir", price: 32, description: "Sing in the school's vocal ensemble." },
-    { ticker: "THTR", name: "Theater Tech", price: 30, description: "Build sets and run tech for productions." },
-    { ticker: "IMPROV", name: "Improv Comedy", price: 35, description: "Perform spontaneous comedy and sketches." },
-  ];
-
-  const createdMarketIds: { marketId: string; price: number; index: number }[] = [];
-
-  for (let i = 0; i < stocksData.length; i++) {
-    const s = stocksData[i];
-    const marketId = randomUUID();
-    await db.insert(markets).values({
-      id: marketId,
-      type: "STOCK",
-      title: s.name,
-      description: s.description,
-      category: "Clubs",
-      status: "OPEN",
-      source: "INTERNAL",
-      closeAt: null,
-      resolveAt: null,
-      resolutionRule: null,
-      createdBy: adminId,
-    });
-
-    await db.insert(stockMetaTable).values({
-      id: randomUUID(),
-      marketId,
-      ticker: s.ticker,
-      initialPrice: s.price,
-      currentPrice: s.price,
-      floatSupply: 10000,
-      virtualLiquidity: 100000,
-    });
-
-    createdMarketIds.push({ marketId, price: s.price, index: i });
-  }
-
-  console.log(`Created ${createdMarketIds.length} stock markets, generating historical data...`);
-
-  for (const { marketId, price, index } of createdMarketIds) {
-    const patternType = assignPatternType(index);
-    await generateHistoricalCandles(marketId, price, patternType, 180);
-  }
-
-  console.log("Database seeding complete!");
-}
-
-// Initialize database storage and seed if needed
+// Database-backed storage. Seeding is handled exclusively by server/seed.ts
+// (the single canonical seeder) and price simulation by storage.maybeTickStockPrices()
+// plus an optional local-dev interval (stockSimulator.startStockSimulation, guarded
+// off on Vercel). Nothing runs at module load.
 const dbStorage = new DbStorage();
 
-// Export database storage
 export const storage = dbStorage;
-
-// Call seeding function on startup and always start simulation
-seedDatabase().then(() => {
-  startStockSimulation(5);
-}).catch((err) => {
-  console.error("Failed to seed database:", err);
-});

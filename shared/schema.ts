@@ -1,4 +1,4 @@
-import { pgTable, text, varchar, integer, timestamp, boolean, real } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, timestamp, boolean, real, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 import { sql } from "drizzle-orm";
@@ -107,17 +107,37 @@ export const trades = pgTable("trades", {
   price: real("price").notNull(),
   total: real("total").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => [
+  index("trades_user_idx").on(table.userId),
+  index("trades_market_idx").on(table.marketId),
+]);
 
 // Positions
+//
+// Uniqueness: exactly one row per (userId, marketId, outcome-or-stock).
+// outcomeId is NULL for stock positions, and Postgres treats NULLs as distinct
+// in a plain unique index — which would allow duplicate stock rows. To get a
+// robust single-target upsert we add a STORED generated column `outcomeKey` =
+// COALESCE(outcomeId, '') and put the UNIQUE index on
+// (userId, marketId, outcomeKey). This gives a stable, non-null key that works
+// identically for predictions and stocks.
+//
+// STORAGE ON CONFLICT TARGET: use the three plain columns
+//   [positions.userId, positions.marketId, positions.outcomeKey]
+// e.g. `.onConflictDoUpdate({ target: [positions.userId, positions.marketId, positions.outcomeKey], set: {...} })`.
+// Do NOT insert `outcomeKey` yourself — it is generated ($inferInsert omits it).
 export const positions = pgTable("positions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull(),
   marketId: varchar("market_id").notNull(),
   outcomeId: varchar("outcome_id"),
+  outcomeKey: varchar("outcome_key").generatedAlwaysAs(sql`coalesce("outcome_id", '')`),
   qty: integer("qty").notNull().default(0),
   avgCost: real("avg_cost").notNull().default(0),
-});
+}, (table) => [
+  uniqueIndex("positions_user_market_outcome_uq").on(table.userId, table.marketId, table.outcomeKey),
+  index("positions_user_idx").on(table.userId),
+]);
 
 // Price snapshots for charts
 export const priceSnapshots = pgTable("price_snapshots", {
@@ -175,15 +195,23 @@ export const reports = pgTable("reports", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
-// Resolutions (prediction markets)
+// Resolutions (prediction markets) — audit trail for storage.resolveMarket().
+// - winningOutcomeId is NULLABLE: void/refund resolutions have no winner.
+// - resolvedBy is NULLABLE: the resolveMarket seam does not take an actor id.
+// - marketId is intentionally NOT unique so a corrective re-resolution can
+//   append a fresh audit row (idempotency is enforced by market.status in
+//   storage, never double-paying).
 export const resolutions = pgTable("resolutions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  marketId: varchar("market_id").notNull().unique(),
-  resolvedBy: varchar("resolved_by").notNull(),
-  winningOutcomeId: varchar("winning_outcome_id").notNull(),
+  marketId: varchar("market_id").notNull(),
+  resolvedBy: varchar("resolved_by"),
+  winningOutcomeId: varchar("winning_outcome_id"),
+  voidRefund: boolean("void_refund").notNull().default(false),
   note: text("note"),
   resolvedAt: timestamp("resolved_at").defaultNow().notNull(),
-});
+}, (table) => [
+  index("resolutions_market_idx").on(table.marketId),
+]);
 
 // Balance events log
 export const balanceEvents = pgTable("balance_events", {
@@ -233,16 +261,20 @@ export const insertUserSchema = createInsertSchema(users).pick({
   displayName: true,
   grade: true,
 }).extend({
-  email: z.string().email().refine((email) => email.endsWith("@menloschool.org"), {
-    message: "Email must end with @menloschool.org",
-  }),
+  // Normalize (trim + lowercase) BEFORE the domain check so downstream email
+  // comparisons are case-insensitive and mixed-case @MenloSchool.org passes.
+  email: z.string().email()
+    .transform((email) => email.trim().toLowerCase())
+    .refine((email) => email.endsWith("@menloschool.org"), {
+      message: "Email must end with @menloschool.org",
+    }),
   password: z.string().min(8, "Password must be at least 8 characters"),
   displayName: z.string().min(2, "Display name must be at least 2 characters"),
   grade: z.string().optional(),
 });
 
 export const loginSchema = z.object({
-  email: z.string().email(),
+  email: z.string().email().transform((email) => email.trim().toLowerCase()),
   password: z.string(),
 });
 
@@ -254,15 +286,19 @@ export const insertMarketSchema = createInsertSchema(markets).pick({
   closeAt: true,
   resolveAt: true,
   resolutionRule: true,
+}).extend({
+  // JSON sends dates as strings; coerce so timestamp columns accept them.
+  closeAt: z.coerce.date().optional().nullable(),
+  resolveAt: z.coerce.date().optional().nullable(),
 });
 
 export const insertStockSchema = z.object({
-  ticker: z.string().min(3).max(5).regex(/^[A-Z]+$/, "Ticker must be 3-5 uppercase letters"),
+  ticker: z.string().regex(/^[A-Z0-9]{1,6}$/, "Ticker must be 1-6 uppercase letters or numbers"),
   name: z.string().min(2),
   description: z.string().min(10),
   category: z.string(),
   initialPrice: z.number().min(1).max(1000),
-  floatSupply: z.number().min(100).max(1000000),
+  floatSupply: z.number().int().min(100).max(1000000),
 });
 
 export const insertTradeSchema = z.object({
@@ -287,7 +323,7 @@ export const insertGameSchema = z.object({
   sport: z.enum(["BASKETBALL", "FOOTBALL", "SOCCER", "BASEBALL", "VOLLEYBALL", "TENNIS", "SWIMMING", "TRACK", "OTHER"]),
   opponent: z.string().min(1),
   isHome: z.boolean(),
-  gameDate: z.string().transform((s) => new Date(s)),
+  gameDate: z.coerce.date(),
 });
 
 // Types
